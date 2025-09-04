@@ -4,13 +4,12 @@ A comprehensive Python library for hyperspectral image loading, preprocessing, a
 
 ## Features
 
-- 🔬 **Core Classes**: `HS_image` and `MS_image` for hyperspectral/multispectral data handling
-- ⚙️ **Complete Preprocessing Pipeline**: Sensor calibration, solar correction, spectral smoothing, normalization
-- 🎭 **Mask Extraction**: Vegetation segmentation using spectral indices (NDVI, PRI, HBSI)
-- 📊 **Spectral Indices**: Calculate 8+ vegetation and stress indices
-- 🔧 **Configuration Management**: Save/load preprocessing configurations
-- 📁 **Batch Processing**: Process entire folders of hyperspectral images
-- 🎨 **Visualization**: RGB extraction and spectral plotting
+- **Core Classes**: `HS_image` and `MS_image` for hyperspectral/multispectral data handling
+- **Complete Preprocessing Pipeline**: Sensor calibration, solar correction, spectral smoothing, normalization
+- **Mask Extraction**: Vegetation segmentation using spectral indices (NDVI, PRI, HBSI)
+- **Configuration Management**: Save/load preprocessing configurations
+- **Batch Processing**: Process entire folders of hyperspectral images
+- **Visualization**: RGB extraction and spectral plotting
 
 ## Installation
 
