@@ -89,21 +89,6 @@ rgb = processor.get_rgb_sample(show=True)
 spectrum = processor.get_spectrum(roi=(slice(10,20), slice(50,60), slice(None)))
 ```
 
-### Spectral Indices
-
-```python
-from hsi_psi import calculate_ndvi, calculate_pri, calculate_multiple_indices
-
-# Calculate individual indices
-ndvi = calculate_ndvi(image)
-pri = calculate_pri(image)
-
-# Calculate multiple indices at once
-indices = calculate_multiple_indices(image, ['ndvi', 'pri', 'hbsi', 'evi'])
-
-# Use for vegetation masking
-vegetation_mask = (ndvi > 0.2) & (pri < -0.1)
-```
 
 ### Batch Processing
 
