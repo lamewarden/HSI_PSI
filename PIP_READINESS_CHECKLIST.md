@@ -36,11 +36,10 @@ HSI_PSI/                    # Project root
 ## 🔄 TODO - Before Publishing
 
 ### 1. Update GitHub URL
-Edit `setup.py` and update the placeholder URLs:
+✅ **COMPLETED** - GitHub URLs updated in setup.py:
 ```python
-url="https://github.com/yourusername/hsi-psi"
+url="https://github.com/lamewarden/HSI_PSI"
 ```
-Replace with your actual GitHub repository URL.
 
 ### 2. Test Package Building
 Run these commands to test your package:
