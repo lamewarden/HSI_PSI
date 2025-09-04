@@ -1,0 +1,27 @@
+# MANIFEST.in - Include additional files in the package distribution
+
+# Include documentation files
+include README.md
+include requirements.txt
+include LICENSE
+include PIP_READINESS_CHECKLIST.md
+
+# Include all Python files
+recursive-include hsi_psi *.py
+recursive-include tests *.py
+recursive-include examples *.py
+
+# Include data files if any (uncomment and modify as needed)
+# recursive-include hsi_psi/data *
+# recursive-include examples/data *
+
+# Exclude development and build files
+global-exclude *.pyc
+global-exclude __pycache__
+global-exclude .git*
+global-exclude *.so
+global-exclude .DS_Store
+exclude .gitignore
+prune build
+prune dist
+prune *.egg-info
