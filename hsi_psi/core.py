@@ -199,6 +199,39 @@ class HS_image:
         return np.eye(3), width, height
     
 
+
+    def normalize(self, to_wl = 1000, clip_to = 3):
+        if self.normalized == True:
+            print("HS image is already normalized. No new transformation will be performed")
+        else:
+            try:
+                self.img = self.img / self[to_wl][:,:,np.newaxis]
+            except ValueError:
+                self.img = self.img / self[to_wl]
+            self.img[np.isnan(self.img)] = 0
+            self.img[np.isinf(self.img)] = 0
+            self.img = np.clip(self.img, 0, clip_to)
+            self.normalized=True
+        
+    def apply_snv(self):
+        """
+        Applies SNV transformation to the entire hyperspectral image in a vectorized manner.
+        """
+        # Reshape the image to (num_pixels, num_bands)
+        flat_img = self.img.reshape(-1, self.img.shape[-1])
+        
+        # Calculate mean and std along the spectral axis
+        mean_spectrum = np.mean(flat_img, axis=1, keepdims=True)
+        std_spectrum = np.std(flat_img, axis=1, keepdims=True)
+        
+        # Apply SNV and handle zero std deviation
+        snv_image = (flat_img - mean_spectrum) / (std_spectrum + self.epsilon)  # Add epsilon to avoid division by zero
+        
+        # Reshape back to the original image dimensions
+        self.img = snv_image.reshape(self.img.shape)
+
+
+
     def flatten_to_df(self):
         """
         Flattenting whole HS image into 2D DF with separate pixels as rows and WL as columns.
