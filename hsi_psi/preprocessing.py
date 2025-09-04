@@ -9,6 +9,7 @@ from scipy.ndimage import gaussian_filter1d
 from scipy.signal import savgol_filter
 from skimage.morphology import remove_small_objects
 import glob
+import pandas as pd
 
 # Import from local modules using relative imports
 from .core import HS_image, get_rgb_sample
