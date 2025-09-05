@@ -12,7 +12,7 @@ import glob
 import pandas as pd
 
 # Import from local modules using relative imports
-from .core import HS_image, get_rgb_sample
+from .core import HS_image
 
 warnings.filterwarnings("ignore")
 
