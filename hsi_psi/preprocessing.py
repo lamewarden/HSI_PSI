@@ -1279,6 +1279,87 @@ class HS_preprocessor:
         
         return rgb_sample
     
+
+    def spectrum_probe(
+            self, 
+            normalize=True, 
+            correct=False, 
+            show=True, 
+            title='RGB Sample', 
+            axes=False, 
+            repeat=1, 
+            rois=None,
+            figure_size=(8, 6)):
+        
+        rgb_img = self.get_rgb_sample(normalize=normalize, correct=correct, repeat=repeat, show=False)
+        if rois is not None:
+            probed_spectra = {}
+            for roi_name, slices in rois.items():
+                mean_spectrum, wavelengths = self.get_spectrum(slices, show=False)
+                probed_spectra[roi_name] = {
+                    "spectrum": mean_spectrum,
+                    "wavelengths": wavelengths,
+                    "roi": slices
+                }
+        if show:
+            # Create subplots: RGB image on top, spectrum plot below
+            if rois is not None:
+                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(figure_size[0], figure_size[1] * 1.5))
+            else:
+                fig, ax1 = plt.subplots(1, 1, figsize=figure_size)
+            
+            # Display RGB image
+            ax1.imshow(rgb_img)
+            
+            if rois is not None:
+                # Get matplotlib default colors
+                colors = plt.cm.tab10(np.linspace(0, 1, len(probed_spectra)))
+                
+                # Add colored ROI labels and boxes on RGB image
+                for i, (roi_name, data) in enumerate(probed_spectra.items()):
+                    slices = data["roi"]
+                    y_slice, x_slice = slices
+                    
+                    # Apply repeat amplification to y-coordinates to match stretched image
+                    y_center = ((y_slice.start + y_slice.stop) // 2) * repeat
+                    x_center = (x_slice.start + x_slice.stop) // 2
+                    
+                    # Get the color for this ROI
+                    color = colors[i]
+                    
+                    # Add colored text box
+                    ax1.text(x_center, y_center, roi_name, color='white', fontsize=12,
+                            ha='center', va='center', 
+                            bbox=dict(facecolor=color, alpha=0.7, pad=2))
+                
+                # Plot spectra with matching colors
+                for i, (roi_name, data) in enumerate(probed_spectra.items()):
+                    spectrum = data["spectrum"]
+                    wavelengths = data["wavelengths"]
+                    color = colors[i]
+                    
+                    ax2.plot(wavelengths, spectrum, color=color, label=roi_name, linewidth=2)
+                
+                ax2.set_xlabel('Wavelength (nm)')
+                ax2.set_ylabel('Reflectance')
+                ax2.set_title('Spectra from ROIs')
+                ax2.legend()
+                ax2.grid(True, alpha=0.3)
+            
+            ax1.set_title(title)
+            if not axes:
+                ax1.axis('off')
+            
+            plt.tight_layout()
+            plt.show()
+        
+        if rois is not None:
+            return probed_spectra
+        else:
+            return rgb_img
+
+
+
     
     
     @staticmethod
