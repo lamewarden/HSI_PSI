@@ -50,7 +50,6 @@ class HS_image:
         # filling nans with 0
         self.img[np.isnan(self.img)] = 0
         self.img[np.isinf(self.img)] = clip_to
-        self.rgb_sample = get_rgb_sample(self, normalize=True)
 
 
     def upload_calibration(self, dc):

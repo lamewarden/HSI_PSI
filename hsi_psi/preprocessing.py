@@ -1315,17 +1315,31 @@ class HS_preprocessor:
                 # Get matplotlib default colors
                 colors = plt.cm.tab10(np.linspace(0, 1, len(probed_spectra)))
                 
-                # Add colored ROI labels and boxes on RGB image
+                # Add colored ROI bounding boxes and labels on RGB image
                 for i, (roi_name, data) in enumerate(probed_spectra.items()):
                     slices = data["roi"]
                     y_slice, x_slice = slices
                     
                     # Apply repeat amplification to y-coordinates to match stretched image
+                    y_start_stretched = y_slice.start * repeat
+                    y_stop_stretched = y_slice.stop * repeat
+                    x_start = x_slice.start
+                    x_stop = x_slice.stop
+                    
+                    # Calculate center for text label
                     y_center = ((y_slice.start + y_slice.stop) // 2) * repeat
                     x_center = (x_slice.start + x_slice.stop) // 2
                     
                     # Get the color for this ROI
                     color = colors[i]
+                    
+                    # Add colored bounding box rectangle
+                    from matplotlib.patches import Rectangle
+                    rect = Rectangle((x_start, y_start_stretched), 
+                                   x_stop - x_start, 
+                                   y_stop_stretched - y_start_stretched,
+                                   linewidth=3, edgecolor=color, facecolor='none', alpha=0.8)
+                    ax1.add_patch(rect)
                     
                     # Add colored text box
                     ax1.text(x_center, y_center, roi_name, color='white', fontsize=12,
