@@ -131,7 +131,7 @@ class HS_preprocessor:
 
         # Display all vegetation indices for calibration
         if show_visualization:
-            orig_rgb = get_rgb_sample(self.image, normalize=True, correct=False)
+            orig_rgb = self.get_rgb_sample(normalize=True, correct=False)
             
             fig, axes = plt.subplots(2, 3, figsize=(18, 6))
             fig.suptitle('Vegetation Indices for Threshold Calibration', fontsize=16, fontweight='bold')
