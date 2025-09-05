@@ -10,9 +10,6 @@ from .core import (
     HS_image, 
     MS_image, 
     get_hdr_images, 
-    get_rgb_sample, 
-    get_rgb_from_array,
-    stretchImage, 
     get_polygon_masks_from_json, 
     standardize_image, 
     convert_header_to_envi
@@ -34,9 +31,6 @@ __all__ = [
     
     # Utility functions
     "get_hdr_images",
-    "get_rgb_sample",
-    "get_rgb_from_array",
-    "stretchImage",
     "get_polygon_masks_from_json", 
     "standardize_image",
     "convert_header_to_envi"
