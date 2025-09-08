@@ -39,7 +39,7 @@ setup(
     version=get_version(),
     author="Ivan Kashkan",
     author_email="kashkan@psi.cz",
-    description="A comprehensive Python library for hyperspectral image loading, preprocessing, analysis, and visualization",
+    description="A comprehensive Python library for hyperspectral image analysis with advanced data manipulation methods, designed for simplicity and reproducibility in real-life HSI workflows",
     long_description=read_readme(),
     long_description_content_type="text/markdown",
     url="https://github.com/lamewarden/HSI_PSI",

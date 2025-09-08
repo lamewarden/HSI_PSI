@@ -1,8 +1,17 @@
 """
-HSI_PSI - Hyperspectral Image Processing for PSI VNIR/SWIR/MSC cameras
+HSI_PSI - Hyperspectral Image Analysis Library
 
-A comprehensive library for hyperspectral image loading, preprocessing, analysis, and visualization.
+HSI_PSI is designed with simplicity and reproducibility in mind. It uses advanced 
+hyperspectral data manipulation methods, packed together into self-explanatory 
+functions. HSI_PSI tools are based on everyday real-life experience working with 
+HSI data as individual files or extensive image batches.
 
+The package consists of three core modules:
+- core: Foundation classes for data handling and visualization
+- preprocessing: Advanced pipelines for data preparation and correction  
+- utils: Helper functions and utilities for file operations
+
+Developed for PSI VNIR/SWIR/MSC cameras and compatible hyperspectral formats.
 """
 
 # Import main classes and functions for easy access

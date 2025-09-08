@@ -1,6 +1,45 @@
 # HSI_PSI - Hyperspectral Image Analysis Library
 
-A comprehensive Python library for hyperspectral image loading, preprocessing, analysis, and visualization developed for PSI VNIR/SWIR/MSC cameras.
+**HSI_PSI** is a comprehensive Python library for hyperspectral image analysis, designed with simplicity and reproducibility in mind. It provides advanced hyperspectral data manipulation methods, packed together into self-explanatory functions that are based on everyday real-life experience working with HSI data as individual files or extensive image batches.
+
+## 🔬 What HSI_PSI Can Do
+
+HSI_PSI empowers researchers and practitioners to:
+
+- **📁 Load & Handle Data**: Seamlessly work with hyperspectral images from PSI VNIR/SWIR/MSC cameras
+- **⚡ Process Efficiently**: Apply sophisticated preprocessing pipelines with sensor calibration, solar correction, and spectral smoothing
+- **🎭 Extract Information**: Generate vegetation masks and calculate spectral indices (NDVI, PRI, HBSI, EVI, and more)
+- **📊 Visualize Results**: Create RGB representations and interactive spectral plots
+- **🔧 Batch Process**: Handle entire folders of hyperspectral images with consistent preprocessing
+- **💾 Save Configurations**: Store and reuse preprocessing settings for reproducible workflows
+
+## 🏗️ Package Architecture
+
+HSI_PSI consists of three core modules, each designed for specific aspects of hyperspectral analysis:
+
+### **🔧 Core Module**
+The foundation of HSI_PSI, providing:
+- `HS_image` and `MS_image` classes for data handling
+- Image loading and spectral band access
+- RGB extraction and visualization tools
+- Spectral indices calculation
+- Data standardization and format conversion
+
+### **⚙️ Preprocessing Module** 
+Advanced data preparation capabilities:
+- `HS_preprocessor` class for automated pipelines
+- Sensor calibration and radiometric correction
+- Solar irradiance normalization
+- Spectral smoothing and noise reduction
+- Configuration management and batch processing
+
+### **🛠️ Utils Module**
+Helper functions and utilities:
+- File I/O operations
+- Data validation and quality checks
+- Polygon mask generation from JSON
+- Image enhancement and stretching
+- Format conversions and compatibility tools
 
 ## Features
 
