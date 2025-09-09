@@ -1342,7 +1342,7 @@ class HS_preprocessor:
                     ax1.add_patch(rect)
                     
                     # Add colored text box
-                    ax1.text(x_center, y_center, roi_name, color='white', fontsize=12,
+                    ax1.text(x_center, y_start_stretched-2, roi_name, color='white', fontsize=12,
                             ha='center', va='center', 
                             bbox=dict(facecolor=color, alpha=0.7, pad=2))
                 
