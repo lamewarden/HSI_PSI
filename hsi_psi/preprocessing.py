@@ -1342,9 +1342,10 @@ class HS_preprocessor:
                     ax1.add_patch(rect)
                     
                     # Add colored text box
-                    ax1.text(x_center, y_start_stretched, roi_name, color='white', fontsize=12,
+                    ax1.text(x_center, y_start_stretched, roi_name, color=color, fontsize=12,
                             ha='center', va='bottom', 
-                            bbox=dict(facecolor=color, alpha=0.5, pad=2))
+                            # bbox=dict(facecolor=color, alpha=0.5, pad=2)
+                            )
                 
                 # Plot spectra with matching colors
                 for i, (roi_name, data) in enumerate(probed_spectra.items()):
