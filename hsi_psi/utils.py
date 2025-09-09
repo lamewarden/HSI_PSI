@@ -335,3 +335,201 @@ def create_config_template() -> Dict[str, Any]:
     }
     
     return template
+
+
+# utils.py
+import numpy as np
+
+try:
+    from scipy.signal import savgol_filter
+    _HAS_SG = True
+except Exception:
+    _HAS_SG = False
+
+
+def _extract_cube_and_meta(hs_image, mask=None):
+    """
+    Best-effort extractor for HSI_PSI.HS_image-like objects.
+    Expects a spectral cube shaped (H, W, B).
+    """
+    # cube
+    cube = None
+    for attr in ("cube", "data", "array", "X"):
+        if hasattr(hs_image, attr):
+            arr = getattr(hs_image, attr)
+            if isinstance(arr, np.ndarray) and arr.ndim == 3:
+                cube = arr
+                break
+    if cube is None:
+        raise ValueError("Cannot locate 3D spectral cube on hs_image (tried .cube/.data/.array/.X).")
+
+    # wavelengths (optional)
+    wl = None
+    for attr in ("wavelengths", "bands", "wl", "lambda_"):
+        if hasattr(hs_image, attr):
+            w = getattr(hs_image, attr)
+            w = np.asarray(w).ravel()
+            if w.ndim == 1 and w.size == cube.shape[2]:
+                wl = w
+                break
+
+    # mask
+    if mask is None:
+        for attr in ("mask", "roi_mask", "valid_mask"):
+            if hasattr(hs_image, attr):
+                m = getattr(hs_image, attr)
+                if isinstance(m, np.ndarray) and m.shape[:2] == cube.shape[:2]:
+                    mask = m.astype(bool)
+                    break
+    if mask is None:
+        mask = np.ones(cube.shape[:2], dtype=bool)
+
+    return cube, wl, mask
+
+
+def _odd_at_most(val, max_allowed):
+    """Nearest odd integer ≤ min(val, max_allowed). Minimum returned is 3 if possible."""
+    k = int(min(val, max_allowed))
+    if k % 2 == 0:
+        k -= 1
+    if k < 3:
+        k = 3 if max_allowed >= 3 else max_allowed | 1  # last resort odd
+    return max(1, k)
+
+
+def rank_noisy_bands(
+    hs_image,
+    mask=None,
+    window_frac=0.02,
+    window=None,
+    poly=3,
+    n_top=10,
+    use_relative=True,
+    robust=True,
+    eps=1e-12,
+):
+    """
+    Rank spectral bands by noise using residuals to a smoothed spectrum.
+
+    Parameters
+    ----------
+    hs_image : HS_image or compatible
+        Object with a (H,W,B) cube in attribute .cube/.data/.array/.X.
+        Optional attributes: .wavelengths, .mask.
+    mask : ndarray[H,W], optional
+        Valid pixel mask. If None, tries hs_image.mask, else uses all pixels.
+    window_frac : float
+        Savitzky–Golay window as fraction of band count (used if `window` is None).
+    window : int, optional
+        Explicit Savitzky–Golay window length (odd). Overrides window_frac.
+    poly : int
+        Savitzky–Golay polynomial order.
+    n_top : int
+        Number of top noisy bands to return.
+    use_relative : bool
+        If True, rank by NSR = noise/signal_median. If False, rank by absolute noise.
+    robust : bool
+        If True, noise = 1.4826 * MAD; else standard deviation.
+    eps : float
+        Small constant to stabilize division.
+
+    Returns
+    -------
+    result : dict
+        {
+          "order": np.ndarray[B]               # indices sorted descending by score
+          "score": np.ndarray[B]               # NSR or abs noise per band
+          "noise": np.ndarray[B]               # robust noise estimate per band
+          "signal_med": np.ndarray[B]          # median signal per band
+          "top_idx": np.ndarray[min(n_top,B)]  # top band indices
+          "top_score": np.ndarray[min(n_top,B)]
+          "wavelengths": np.ndarray[B] or None
+          "B": int                              # number of bands
+        }
+    """
+    cube, wl, m = _extract_cube_and_meta(hs_image, mask=mask)
+    H, W, B = cube.shape
+    if B < 5:
+        raise ValueError(f"Too few bands for smoothing: B={B}")
+
+    # choose window
+    if window is None:
+        window = max(5, int(round(B * float(window_frac))))
+    win = _odd_at_most(window, B - 1)
+    if poly >= win:
+        poly = max(1, min(poly, win - 1))
+
+    # collect spectra over ROI
+    S = cube[m].astype(np.float64)  # (Npix, B)
+    if S.size == 0:
+        raise ValueError("Mask selects zero pixels.")
+
+    # smooth per spectrum
+    if _HAS_SG:
+        S_smooth = savgol_filter(S, window_length=win, polyorder=poly, axis=1, mode="interp")
+    else:
+        # fallback: moving median filter as a crude smoother
+        k = win
+        pad = k // 2
+        S_pad = np.pad(S, ((0, 0), (pad, pad)), mode="edge")
+        S_smooth = np.empty_like(S)
+        for b in range(B):
+            S_smooth[:, b] = np.median(S_pad[:, b:b + k], axis=1)
+
+    # residuals
+    R = S - S_smooth  # (Npix, B)
+
+    # noise per band
+    if robust:
+        med_R = np.median(R, axis=0)                # (B,)
+        mad = np.median(np.abs(R - med_R), axis=0)  # (B,)
+        noise = 1.4826 * mad
+    else:
+        noise = np.std(R, axis=0, ddof=1)
+
+    # signal level per band
+    signal_med = np.median(S, axis=0)  # (B,)
+
+    # score
+    if use_relative:
+        score = noise / (np.abs(signal_med) + eps)
+    else:
+        score = noise.copy()
+
+    # rank
+    order = np.argsort(score)[::-1]
+    k = int(min(n_top if n_top is not None else 10, B))
+    top_idx = order[:k]
+    top_score = score[top_idx]
+
+    return {
+        "order": order,
+        "score": score,
+        "noise": noise,
+        "signal_med": signal_med,
+        "top_idx": top_idx,
+        "top_score": top_score,
+        "wavelengths": wl,
+        "B": B,
+    }
+
+
+def summarize_noisiest_bands(result, n=None):
+    """
+    Convenience printer. Returns a small dict with indices, wavelengths, and scores.
+    """
+    order = result["order"]
+    wl = result.get("wavelengths", None)
+    score = result["score"]
+    noise = result["noise"]
+    signal = result["signal_med"]
+    k = int(min(n if n is not None else result["top_idx"].size, result["B"]))
+    idx = order[:k]
+    out = {
+        "band_index": idx,
+        "wavelength": (wl[idx] if wl is not None else None),
+        "score": score[idx],
+        "noise": noise[idx],
+        "signal_med": signal[idx],
+    }
+    return out

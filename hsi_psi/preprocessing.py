@@ -57,7 +57,8 @@ class HS_preprocessor:
         self.white_calibration = None
         self.verbose = verbose
         self.reference_teflon = None  # Store reference teflon data as dict: {wavelength: reflectance}
-        
+        self.solar_correction_applied = None  # Track if solar correction was applied
+                
         # Store parameters for each step
         self.config = {}
         self.step_results = {}  # Store intermediate results for visualization
