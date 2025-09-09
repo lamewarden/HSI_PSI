@@ -1338,12 +1338,12 @@ class HS_preprocessor:
                     rect = Rectangle((x_start, y_start_stretched), 
                                    x_stop - x_start, 
                                    y_stop_stretched - y_start_stretched,
-                                   linewidth=3, edgecolor=color, facecolor='none', alpha=0.8)
+                                   linewidth=3, facecolor='none', alpha=0.8)
                     ax1.add_patch(rect)
                     
                     # Add colored text box
-                    ax1.text(x_center, y_start_stretched-10, roi_name, color='white', fontsize=12,
-                            ha='center', va='center', 
+                    ax1.text(x_center, y_start_stretched, roi_name, color='white', fontsize=10,
+                            ha='center', va='bottom', 
                             bbox=dict(facecolor=color, alpha=0.3, pad=2))
                 
                 # Plot spectra with matching colors
