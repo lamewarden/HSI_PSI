@@ -293,13 +293,13 @@ class HS_preprocessor:
         
         if self.verbose:
             print("🔄 Running full preprocessing pipeline...")
-            steps_to_run = ['sensor_calibration', 'solar_correction', 'spectral_smoothing', 'spike_removal', 'normalization']
+            steps_to_run = ['sensor_calibration', 'spike_removal', 'solar_correction', 'spectral_smoothing', 'normalization']
             if extract_masks_flag:
                 steps_to_run.append('mask_extraction')
             print(f"Pipeline steps: {steps_to_run}")
         
         # Run preprocessing pipeline steps in order
-        pipeline_steps = ['sensor_calibration', 'solar_correction', 'spectral_smoothing', 'spike_removal', 'normalization']
+        pipeline_steps = ['sensor_calibration', 'spike_removal', 'solar_correction', 'spectral_smoothing', 'normalization']
         
         for step in pipeline_steps:
             if step in pipeline_config:
@@ -518,7 +518,8 @@ class HS_preprocessor:
         config_to_save = {
             'image_path': self.image_path,
             'processing_config': self.config,
-            'reference_teflon_data': reference_teflon_data
+            'reference_teflon_data': reference_teflon_data,
+            'reference_teflon_meta': getattr(self, 'reference_teflon_meta', None)
         }
         
         with open(filepath, 'w') as f:
@@ -532,6 +533,10 @@ class HS_preprocessor:
                     print(f"  ✓ Included reference teflon spectrum ({ref_info['num_bands']} bands, {ref_info['format']} format)")
                     if ref_info['wavelength_range'] != 'unknown':
                         print(f"    Wavelength range: {ref_info['wavelength_range']}")
+            # Include metadata info about the stored reference teflon if available
+            if hasattr(self, 'reference_teflon_meta') and self.reference_teflon_meta is not None:
+                if self.reference_teflon_meta.get('despiked'):
+                    print(f"  ✓ Reference teflon metadata: despiked=True, params={self.reference_teflon_meta.get('spike_removal_params')}")
     
     def load_config(self, filepath):
         """Load configuration from JSON file, including reference teflon spectrum with wavelengths."""
@@ -603,11 +608,23 @@ class HS_preprocessor:
             if self.verbose:
                 print(f"✓ Configuration loaded from: {filepath}")
                 print(f"  ℹ No reference teflon spectrum found in config")
+        # Restore metadata about the saved reference (if present)
+        self.reference_teflon_meta = saved_config.get('reference_teflon_meta', None)
+        if self.verbose and self.reference_teflon_meta is not None:
+            despiked = self.reference_teflon_meta.get('despiked', False)
+            if despiked:
+                print(f"  ✓ Reference teflon metadata: despiked=True, params={self.reference_teflon_meta.get('spike_removal_params')}")
         
         return self
     
-    def create_reference_teflon_library(self, hs_images, teflon_edge_coord=(-10,-3), 
-                                       white_ref_path=None, dark_calibration=False, clip_to=10):
+    def create_reference_teflon_library(
+            self, 
+            hs_images, 
+            teflon_edge_coord=(-10,-3), 
+            white_ref_path=None, 
+            dark_calibration=False, 
+            clip_to=10
+            ):
         """
         Create a reference teflon spectrum from multiple images taken under optimal conditions.
         
@@ -649,6 +666,25 @@ class HS_preprocessor:
                     dark_calibration=dark_calibration,
                     clip_to=clip_to
                 )
+
+                # If the current processor instance had spike_removal configured/applied,
+                # apply the same despiking to the temporary processor BEFORE extracting teflon.
+                # Use parameters from this instance (`self.config['spike_removal']`) when available.
+                if 'spike_removal' in self.config and self.config.get('spike_removal'):
+                    sr_params = self.config.get('spike_removal', {}).copy()
+                    # Only pass expected keyword args, provide safe defaults if missing
+                    win = sr_params.get('win', 7)
+                    k = sr_params.get('k', 6.0)
+                    replace = sr_params.get('replace', 'median')
+                    try:
+                        # Apply despiking to the calibrated temporary image
+                        temp_processor.remove_spectral_spikes(win=win, k=k, replace=replace)
+                        if self.verbose:
+                            print(f"  ✓ Applied despiking to {os.path.basename(hs_image_path)} (win={win}, k={k}, replace={replace})")
+                    except Exception as e:
+                        if self.verbose:
+                            print(f"  ⚠ Warning: despiking failed for {os.path.basename(hs_image_path)}: {e}")
+
                 
                 # Extract teflon spectrum from the edge
                 teflon_spectrum = temp_processor.image.img[:, teflon_edge_coord[0]:teflon_edge_coord[1], :].mean(axis=(0,1))
@@ -685,6 +721,18 @@ class HS_preprocessor:
         else:
             # Fallback to old array format if no wavelengths available
             self.reference_teflon = reference_teflon.copy()
+
+        # Record metadata about how the reference was constructed (e.g., whether despiking was applied)
+        try:
+            despiked_flag = bool(self.config.get('spike_removal'))
+            spike_params = self.config.get('spike_removal') if despiked_flag else None
+        except Exception:
+            despiked_flag = False
+            spike_params = None
+        self.reference_teflon_meta = {
+            'despiked': despiked_flag,
+            'spike_removal_params': spike_params
+        }
         
         if self.verbose:
             print(f"✓ Created reference teflon from {len(teflon_spectra)} images")

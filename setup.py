@@ -83,8 +83,6 @@ setup(
     keywords="hyperspectral imaging, remote sensing, spectral analysis, image processing, VNIR, SWIR",
     entry_points={
         "console_scripts": [
-            # Add command-line tools here if you have any
-            # "hsi-process=HSI_PSI.cli:main",
         ],
     },
 )
