@@ -5,7 +5,7 @@ import warnings
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-from scipy.ndimage import gaussian_filter1d
+from scipy.ndimage import gaussian_filter1d, median_filter
 from scipy.signal import savgol_filter
 from skimage.morphology import remove_small_objects
 import glob
@@ -34,8 +34,9 @@ class HS_preprocessor:
     1. Sensor calibration (white/dark reference correction)
     2. Solar spectrum correction (using reference teflon)  
     3. Spectral smoothing (Gaussian filtering)
-    4. Normalization (wavelength-based or SNV)
-    5. Mask extraction (vegetation index segmentation) [NEW]
+    4. Spectral spike removal (dead pixel correction) [NEW]
+    5. Normalization (wavelength-based or SNV)
+    6. Mask extraction (vegetation index segmentation)
     
     Features:
     - Step-by-step processing with configuration storage
@@ -292,13 +293,13 @@ class HS_preprocessor:
         
         if self.verbose:
             print("🔄 Running full preprocessing pipeline...")
-            steps_to_run = ['sensor_calibration', 'solar_correction', 'spectral_smoothing', 'normalization']
+            steps_to_run = ['sensor_calibration', 'solar_correction', 'spectral_smoothing', 'spike_removal', 'normalization']
             if extract_masks_flag:
                 steps_to_run.append('mask_extraction')
             print(f"Pipeline steps: {steps_to_run}")
         
         # Run preprocessing pipeline steps in order
-        pipeline_steps = ['sensor_calibration', 'solar_correction', 'spectral_smoothing', 'normalization']
+        pipeline_steps = ['sensor_calibration', 'solar_correction', 'spectral_smoothing', 'spike_removal', 'normalization']
         
         for step in pipeline_steps:
             if step in pipeline_config:
@@ -353,6 +354,10 @@ class HS_preprocessor:
                 # Handle spectral smoothing
                 elif step == 'spectral_smoothing':
                     self.spectral_smoothing(**step_params)
+                
+                # Handle spike removal
+                elif step == 'spike_removal':
+                    self.remove_spectral_spikes(**step_params)
                 
                 # Handle normalization
                 elif step == 'normalization':
@@ -711,6 +716,11 @@ class HS_preprocessor:
                 'sigma': 11,  # Gaussian smoothing parameter
                 'mode': 'reflect'  # Boundary handling mode
             },
+            'spike_removal': {
+                'win': 7,  # Window size for local statistics (odd number >=3)
+                'k': 6.0,  # Threshold in robust standard deviations
+                'replace': 'median'  # Replacement strategy: 'median' or 'mean'
+            },
             'normalization': {
                 'method': 'to_wl',  # 'to_wl' for wavelength normalization, 'snv' for SNV
                 'to_wl': 751,  # Wavelength for normalization (nm) - only used if method='to_wl'
@@ -1055,6 +1065,164 @@ class HS_preprocessor:
         if self.verbose:
             print(f"✓ Applied spectral smoothing (sigma={sigma})")
         return self
+    
+    def remove_spectral_spikes(self, win=7, k=6.0, replace="median"):
+        """
+        Step 4.5: Detect and fix single-band spikes (dead pixels) in hyperspectral data.
+        
+        Applies spike detection and correction to every pixel spectrum in the hypercube.
+        Uses local baseline estimation and robust statistics to identify spectral anomalies.
+        
+        Parameters:
+        -----------
+        win : int, optional (default=7)
+            Window size for local statistics. Must be odd (>=3).
+            Larger windows are more conservative in spike detection.
+        k : float, optional (default=6.0) 
+            Threshold in robust standard deviations for spike detection.
+            Higher values are more conservative (detect fewer spikes).
+        replace : str, optional (default="median")
+            Replacement strategy for detected spikes: 'median' or 'mean' of neighbors.
+            
+        Returns:
+        --------
+        self : HS_preprocessor
+            Returns self for method chaining.
+            
+        Notes:
+        ------
+        - Spikes are detected based on deviation from local baseline AND sharpness
+        - Uses robust statistics (MAD) to avoid bias from existing spikes
+        - Preserves broad spectral features while removing narrow artifacts
+        - Processing time scales with image size (applied per-pixel)
+        """
+        if self.image is None:
+            raise ValueError("No image loaded.")
+        
+        # Ensure window size is odd
+        if win % 2 == 0:
+            win += 1
+            
+        if self.verbose:
+            print(f"Removing spectral spikes (win={win}, k={k}, replace={replace})...")
+        
+        # Get image dimensions
+        rows, cols, bands = self.image.img.shape
+        total_pixels = rows * cols
+        spike_count = 0
+        
+        # Process each pixel spectrum
+        for i in range(rows):
+            for j in range(cols):
+                # Extract spectrum for current pixel
+                spectrum = self.image.img[i, j, :]
+                
+                # Skip if spectrum is all zeros or contains NaN
+                if np.all(spectrum == 0) or np.any(np.isnan(spectrum)):
+                    continue
+                
+                # Apply spike removal to this spectrum
+                cleaned_spectrum, spike_mask = self._remove_spikes_1d(
+                    spectrum, win=win, k=k, replace=replace
+                )
+                
+                # Update the image with cleaned spectrum
+                self.image.img[i, j, :] = cleaned_spectrum
+                
+                # Count spikes for reporting
+                spike_count += np.sum(spike_mask)
+        
+        # Store configuration and results
+        self.config['spike_removal'] = {
+            'win': win, 
+            'k': k, 
+            'replace': replace,
+            'spikes_detected': int(spike_count)
+        }
+        self.step_results['spike_removed'] = copy.deepcopy(self.image)
+        
+        if self.verbose:
+            spike_rate = spike_count / (total_pixels * bands) * 100
+            print(f"✓ Removed {spike_count} spectral spikes ({spike_rate:.3f}% of all measurements)")
+        
+        return self
+    
+    def _remove_spikes_1d(self, spectrum, win=7, k=6.0, replace="median"):
+        """
+        Internal method: Detect and fix spikes in a single spectrum.
+        
+        Parameters:
+        -----------
+        spectrum : array_like
+            1D array of spectral values [n_bands]
+        win : int
+            Window size for local statistics (odd number >=3)
+        k : float  
+            Threshold in robust sigmas
+        replace : str
+            'median' or 'mean' of neighbors
+            
+        Returns:
+        --------
+        cleaned : ndarray
+            Cleaned spectrum with spikes replaced
+        mask : ndarray
+            Boolean mask (True where spikes were corrected)
+        """
+        x = np.asarray(spectrum, dtype=float)
+        assert x.ndim == 1
+        
+        if win % 2 == 0:
+            win += 1
+            
+        # Local baseline via rolling median filter
+        baseline = median_filter(x, size=win, mode="nearest")
+        
+        # Robust scale estimation from residuals
+        resid = x - baseline
+        mad = np.median(np.abs(resid - np.median(resid)))
+        sigma = 1.4826 * mad if mad > 0 else np.std(resid) + 1e-12
+        
+        # Spike detection: large deviation from local baseline
+        mask = np.abs(resid) > k * sigma
+        
+        # Additional sharpness criterion: require both adjacent differences to be large
+        # This helps distinguish spikes from broader spectral features
+        dx = np.r_[0, np.diff(x), 0]  # Differences with padding
+        sharp = (np.abs(dx[:-1]) > k * sigma/2) & (np.abs(dx[1:]) > k * sigma/2)
+        mask &= sharp
+        
+        # If no spikes detected, return original spectrum
+        if not mask.any():
+            return x.copy(), mask
+        
+        # Replace detected spikes with neighbor values
+        cleaned = x.copy()
+        half = win // 2
+        spike_indices = np.where(mask)[0]
+        
+        for i in spike_indices:
+            # Define window around spike (excluding the spike itself)
+            lo = max(0, i - half)
+            hi = min(len(x), i + half + 1)
+            window_data = x[lo:hi]
+            
+            # Remove the spike point from the window
+            spike_pos_in_window = i - lo
+            if 0 <= spike_pos_in_window < len(window_data):
+                neighbors = np.delete(window_data, spike_pos_in_window)
+            else:
+                neighbors = window_data
+                
+            # Calculate replacement value
+            if len(neighbors) > 0:
+                if replace == "median":
+                    replacement = np.median(neighbors)
+                else:  # mean
+                    replacement = np.mean(neighbors)
+                cleaned[i] = replacement
+        
+        return cleaned, mask
     
     def normalization(self, to_wl=751, clip_to=10, method="to_wl"):
         """Step 5: Final normalization to specific wavelength or SNV normalization."""
