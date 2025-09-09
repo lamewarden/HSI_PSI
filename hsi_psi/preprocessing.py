@@ -458,9 +458,11 @@ class HS_preprocessor:
                     
                     # Handle sensor calibration (Step 1)
                     if step == 'sensor_calibration':
-                        # Get white reference path from config
-                        white_ref_path = step_params.pop('white_ref_path', None)
-                        self.sensor_calibration(white_ref_path=white_ref_path, **step_params)
+                        # Filter out metadata and handle white_ref_path separately
+                        method_params = {k: v for k, v in step_params.items() 
+                                       if k not in ['white_ref_path', 'calibration_applied', 'calibration_source']}
+                        white_ref_path = step_params.get('white_ref_path', None)
+                        self.sensor_calibration(white_ref_path=white_ref_path, **method_params)
                     
                     # Handle spike removal (Step 2)
                     elif step == 'spike_removal':
@@ -471,7 +473,10 @@ class HS_preprocessor:
                     
                     # Handle spectral cropping (Step 3)
                     elif step == 'spectral_cropping':
-                        self.crop_spectral_range(**step_params)
+                        # Filter out metadata parameters that shouldn't be passed to the method
+                        method_params = {k: v for k, v in step_params.items() 
+                                       if k not in ['original_bands', 'original_range', 'cropped_bands', 'cropped_range']}
+                        self.crop_spectral_range(**method_params)
                     
                     # Handle solar correction (Step 4)
                     elif step == 'solar_correction':
@@ -516,11 +521,17 @@ class HS_preprocessor:
                     
                     # Handle spectral smoothing (Step 5)
                     elif step == 'spectral_smoothing':
-                        self.spectral_smoothing(**step_params)
+                        # Filter out metadata parameters that shouldn't be passed to the method
+                        method_params = {k: v for k, v in step_params.items() 
+                                       if k not in ['smoothing_applied', 'smoothing_method']}
+                        self.spectral_smoothing(**method_params)
                     
                     # Handle normalization (Step 6)
                     elif step == 'normalization':
-                        self.normalization(**step_params)
+                        # Filter out metadata parameters that shouldn't be passed to the method
+                        method_params = {k: v for k, v in step_params.items() 
+                                       if k not in ['normalization_applied', 'normalization_method']}
+                        self.normalization(**method_params)
                         
                 except Exception as e:
                     error_msg = f"Error in pipeline step '{step}': {str(e)}"
@@ -642,18 +653,35 @@ class HS_preprocessor:
             'mask_extraction': ['pri_thr', 'ndvi_thr', 'hbsi_thr', 'min_pix_size', 'repeat', 'show_visualization']
         }
         
+        # Define metadata parameters that are acceptable but filtered out during execution
+        metadata_params = {
+            'sensor_calibration': ['calibration_applied', 'calibration_source'],
+            'spike_removal': ['spikes_detected'],
+            'spectral_cropping': ['original_bands', 'original_range', 'cropped_bands', 'cropped_range'],
+            'solar_correction': ['reference_source', 'has_reference'],
+            'spectral_smoothing': ['smoothing_applied', 'smoothing_method'],
+            'normalization': ['normalization_applied', 'normalization_method'],
+            'mask_extraction': []
+        }
+        
         all_valid = True
         
         for step, expected in expected_params.items():
             if step in self.config:
                 config_params = set(self.config[step].keys())
                 expected_set = set(expected)
+                metadata_set = set(metadata_params.get(step, []))
                 
-                # Check for unexpected parameters
-                unexpected = config_params - expected_set
+                # Check for unexpected parameters (excluding known metadata)
+                unexpected = config_params - expected_set - metadata_set
                 if unexpected:
                     print(f"⚠️  {step}: Unexpected parameters: {list(unexpected)}")
                     all_valid = False
+                
+                # Report metadata parameters that will be filtered
+                metadata_found = config_params & metadata_set
+                if metadata_found:
+                    print(f"ℹ️  {step}: Metadata parameters (filtered): {list(metadata_found)}")
                 
                 # Check for missing required parameters (only warn, don't fail)
                 missing = expected_set - config_params
