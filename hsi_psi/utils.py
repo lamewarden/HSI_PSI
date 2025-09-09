@@ -9,7 +9,7 @@ import os
 import glob
 import matplotlib.pyplot as plt
 import pandas as pd
-from typing import Dict, Optional, Union, List, Tuple
+from typing import Dict, Optional, Union, List, Tuple, Any
 from .core import HS_image, MS_image
 
 
