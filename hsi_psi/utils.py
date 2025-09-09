@@ -308,24 +308,25 @@ def create_config_template() -> Dict[str, Any]:
         >>> config['sensor_calibration']['clip_to'] = 15
     """
     template = {
-        'spectral_cropping': {
-            'wl_start': None,
-            'wl_end': None,
-            'band_start': None,
-            'band_end': None
-        },
         'sensor_calibration': {
-            'clip_to': 10,
+            'white_ref_path': None,
             'dark_calibration': False,
-            'white_ref_path': None
+            'clip_to': 10
         },
         'spike_removal': {
             'win': 7,
             'k': 6.0,
             'replace': 'median'
         },
+        'spectral_cropping': {
+            'wl_start': None,
+            'wl_end': None,
+            'band_start': None,
+            'band_end': None
+        },
         'solar_correction': {
-            'teflon_edge_coord': [-10, -3],
+            'teflon_edge_coord': (-10, -3),
+            'reference_teflon': None,
             'smooth_window': 35
         },
         'spectral_smoothing': {
@@ -333,15 +334,17 @@ def create_config_template() -> Dict[str, Any]:
             'mode': 'reflect'
         },
         'normalization': {
-            'method': 'to_wl',
             'to_wl': 751,
-            'clip_to': 10
+            'clip_to': 10,
+            'method': 'to_wl'
         },
         'mask_extraction': {
             'pri_thr': -0.1,
             'ndvi_thr': 0.2, 
             'hbsi_thr': -0.6,
-            'min_pix_size': 2
+            'min_pix_size': 2,
+            'repeat': 10,
+            'show_visualization': True
         }
     }
     

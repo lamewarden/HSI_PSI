@@ -480,6 +480,10 @@ class HS_preprocessor:
                         method_params = {k: v for k, v in step_params.items() 
                                        if k not in ['reference_source', 'has_reference']}
                         
+                        # Convert teflon_edge_coord from list to tuple if needed
+                        if 'teflon_edge_coord' in method_params and isinstance(method_params['teflon_edge_coord'], list):
+                            method_params['teflon_edge_coord'] = tuple(method_params['teflon_edge_coord'])
+                        
                         # Use loaded reference teflon if available
                         if hasattr(self, 'reference_teflon') and self.reference_teflon is not None:
                             if isinstance(self.reference_teflon, dict):
@@ -615,6 +619,54 @@ class HS_preprocessor:
             print("  📝 No processing steps completed yet")
             
         print("=" * 60)
+    
+    def validate_config_parameters(self):
+        """
+        Validate that all configuration parameters match method signatures.
+        """
+        if not hasattr(self, 'config') or not self.config:
+            print("❌ No configuration loaded")
+            return False
+            
+        print("🔍 VALIDATING CONFIGURATION PARAMETERS")
+        print("=" * 50)
+        
+        # Define expected parameters for each method
+        expected_params = {
+            'sensor_calibration': ['white_ref_path', 'dark_calibration', 'clip_to'],
+            'spike_removal': ['win', 'k', 'replace'],
+            'spectral_cropping': ['wl_start', 'wl_end', 'band_start', 'band_end'],
+            'solar_correction': ['teflon_edge_coord', 'reference_teflon', 'smooth_window'],
+            'spectral_smoothing': ['sigma', 'mode'],
+            'normalization': ['to_wl', 'clip_to', 'method'],
+            'mask_extraction': ['pri_thr', 'ndvi_thr', 'hbsi_thr', 'min_pix_size', 'repeat', 'show_visualization']
+        }
+        
+        all_valid = True
+        
+        for step, expected in expected_params.items():
+            if step in self.config:
+                config_params = set(self.config[step].keys())
+                expected_set = set(expected)
+                
+                # Check for unexpected parameters
+                unexpected = config_params - expected_set
+                if unexpected:
+                    print(f"⚠️  {step}: Unexpected parameters: {list(unexpected)}")
+                    all_valid = False
+                
+                # Check for missing required parameters (only warn, don't fail)
+                missing = expected_set - config_params
+                if missing:
+                    print(f"ℹ️  {step}: Missing optional parameters: {list(missing)}")
+                
+                if not unexpected:
+                    print(f"✅ {step}: Parameters valid")
+            else:
+                print(f"ℹ️  {step}: Section missing from config")
+        
+        print("=" * 50)
+        return all_valid
     
     def get_step_result(self, step_name):
         """Get the HS_image result from a specific processing step."""
