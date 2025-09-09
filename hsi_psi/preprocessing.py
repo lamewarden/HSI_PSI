@@ -766,6 +766,7 @@ class HS_preprocessor:
             ):
         """
         Create a reference teflon spectrum from multiple images taken under optimal conditions.
+        The reference will be mapped to match the current processor's wavelength range.
         
         Args:
             hs_images: List of paths to hyperspectral images OR directory path containing images
@@ -775,8 +776,14 @@ class HS_preprocessor:
             clip_to: Maximum reflectance value for sensor calibration
             
         Returns:
-            numpy.ndarray: Reference teflon spectrum (median of all input spectra)
+            numpy.ndarray: Reference teflon spectrum mapped to current wavelength range
         """
+        # Check if we have a current image to map to
+        if not hasattr(self, 'image') or self.image is None:
+            raise ValueError("No current image loaded. Load an image first to define target wavelength range.")
+        
+        target_wavelengths = np.array(self.image.ind)
+        
         # Check if input is a directory or list of files
         if isinstance(hs_images, str) and os.path.isdir(hs_images):
             # It's a directory - find all files ending with "Data.hdr"
@@ -793,11 +800,19 @@ class HS_preprocessor:
             raise ValueError("hs_images_list cannot be empty")
         
         teflon_spectra = []
+        source_wavelengths = None
         
         for hs_image_path in hs_images_list:
             try:
                 # Create temporary processor for this image (inherit verbose setting)
                 temp_processor = HS_preprocessor(hs_image_path, verbose=False)
+                
+                # Store source wavelengths from the first image
+                if source_wavelengths is None:
+                    source_wavelengths = np.array(temp_processor.image.ind)
+                    if self.verbose:
+                        print(f"  Library images range: {source_wavelengths[0]}-{source_wavelengths[-1]} nm ({len(source_wavelengths)} bands)")
+                        print(f"  Target range: {target_wavelengths[0]}-{target_wavelengths[-1]} nm ({len(target_wavelengths)} bands)")
                 
                 # Apply sensor calibration with specified parameters
                 temp_processor.sensor_calibration(
@@ -824,8 +839,7 @@ class HS_preprocessor:
                         if self.verbose:
                             print(f"  ⚠ Warning: despiking failed for {os.path.basename(hs_image_path)}: {e}")
 
-                
-                # Extract teflon spectrum from the edge
+                # Extract teflon spectrum from the edge (in source wavelength space)
                 teflon_spectrum = temp_processor.image.img[:, teflon_edge_coord[0]:teflon_edge_coord[1], :].mean(axis=(0,1))
                 teflon_spectra.append(teflon_spectrum)
                 
@@ -838,28 +852,27 @@ class HS_preprocessor:
             raise ValueError("No valid teflon spectra could be extracted")
         
         # Use median to get robust reference (less affected by outliers)
-        reference_teflon = np.median(teflon_spectra, axis=0)
+        reference_teflon_source = np.median(teflon_spectra, axis=0)
         
-        # Store the created reference teflon spectrum and wavelengths as class attribute
-        reference_wavelengths = None
-        # Get wavelengths from the last processed image (they should all be the same)
-        if hasattr(temp_processor, 'image') and temp_processor.image is not None:
-            reference_wavelengths = np.array(temp_processor.image.ind)
+        # Map the reference teflon spectrum to target wavelengths
+        if not np.array_equal(source_wavelengths, target_wavelengths):
+            if self.verbose:
+                print(f"  Mapping reference teflon spectrum to current wavelength range...")
+            
+            # Use the mapping function from the class
+            reference_teflon_mapped = self._map_spectral_data(
+                reference_teflon_source,
+                source_wavelengths,
+                target_wavelengths,
+                operation='direct'
+            )
         else:
-            # Fallback: use current image wavelengths if available
-            if hasattr(self, 'image') and self.image is not None:
-                reference_wavelengths = np.array(self.image.ind)
-            else:
-                reference_wavelengths = None
-                if self.verbose:
-                    print("  ⚠ Warning: Could not determine wavelengths for reference teflon")
+            reference_teflon_mapped = reference_teflon_source.copy()
+            if self.verbose:
+                print(f"  Wavelength ranges match - no mapping needed")
         
-        # Store in new wavelength-as-keys format
-        if reference_wavelengths is not None:
-            self.reference_teflon = {float(wl): float(refl) for wl, refl in zip(reference_wavelengths, reference_teflon)}
-        else:
-            # Fallback to old array format if no wavelengths available
-            self.reference_teflon = reference_teflon.copy()
+        # Store in new wavelength-as-keys format using target wavelengths
+        self.reference_teflon = {float(wl): float(refl) for wl, refl in zip(target_wavelengths, reference_teflon_mapped)}
 
         # Record metadata about how the reference was constructed (e.g., whether despiking was applied)
         try:
@@ -870,20 +883,22 @@ class HS_preprocessor:
             spike_params = None
         self.reference_teflon_meta = {
             'despiked': despiked_flag,
-            'spike_removal_params': spike_params
+            'spike_removal_params': spike_params,
+            'source_range': f"{source_wavelengths[0]:.1f}-{source_wavelengths[-1]:.1f} nm" if source_wavelengths is not None else "unknown",
+            'target_range': f"{target_wavelengths[0]:.1f}-{target_wavelengths[-1]:.1f} nm",
+            'mapped': not np.array_equal(source_wavelengths, target_wavelengths) if source_wavelengths is not None else False
         }
         
         if self.verbose:
             print(f"✓ Created reference teflon from {len(teflon_spectra)} images")
-            if reference_wavelengths is not None:
-                wl_range = f"{reference_wavelengths[0]:.1f}-{reference_wavelengths[-1]:.1f} nm"
-                print(f"  ✓ Stored reference teflon spectrum ({len(reference_teflon)} bands) with wavelength keys")
-                print(f"    Wavelength range: {wl_range}")
-                print(f"    Access example: reference_teflon[{reference_wavelengths[len(reference_wavelengths)//2]:.1f}] = {reference_teflon[len(reference_teflon)//2]:.4f}")
-            else:
-                print(f"  ✓ Stored reference teflon spectrum ({len(reference_teflon)} bands) - array format")
+            wl_range = f"{target_wavelengths[0]:.1f}-{target_wavelengths[-1]:.1f} nm"
+            print(f"  ✓ Stored reference teflon spectrum ({len(reference_teflon_mapped)} bands) with wavelength keys")
+            print(f"    Target wavelength range: {wl_range}")
+            print(f"    Access example: reference_teflon[{target_wavelengths[len(target_wavelengths)//2]:.1f}] = {reference_teflon_mapped[len(reference_teflon_mapped)//2]:.4f}")
+            if self.reference_teflon_meta.get('mapped', False):
+                print(f"    ✓ Mapped from source range: {self.reference_teflon_meta['source_range']}")
         
-        return reference_teflon
+        return reference_teflon_mapped
 
     @staticmethod
     def create_config_template():
