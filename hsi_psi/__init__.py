@@ -1,17 +1,25 @@
 """
-HSI_PSI - Hyperspectral Image Analysis Library
+HSI_PSI - Advanced Hyperspectral Image Analysis Library v2.0
 
-HSI_PSI is designed with simplicity and reproducibility in mind. It uses advanced 
-hyperspectral data manipulation methods, packed together into self-explanatory 
-functions. HSI_PSI tools are based on everyday real-life experience working with 
-HSI data as individual files or extensive image batches.
+HSI_PSI is designed with simplicity, flexibility, and reproducibility in mind. It uses 
+advanced hyperspectral data manipulation methods with intelligent wavelength mapping, 
+spectral cropping capabilities, and optimized processing pipelines. HSI_PSI tools are 
+based on real-world experience working with HSI data in close-range vegetation monitoring.
 
-The package consists of three core modules:
-- core: Foundation classes for data handling and visualization
-- preprocessing: Advanced pipelines for data preparation and correction  
-- utils: Helper functions and utilities for file operations
+New Features in v2.0:
+- 🎯 Spectral range cropping with automatic metadata updates
+- 🔗 Intelligent wavelength mapping between different sensor configurations  
+- 📈 Advanced noise analysis and spectral quality assessment
+- ⚙️ Optimized processing pipeline order for maximum data quality
+- 🌟 Enhanced reference teflon library creation with automatic adaptation
+- 🔧 Wavelength-based calibration mapping for mixed sensor datasets
 
-Developed for PSI VNIR/SWIR/MSC cameras and compatible hyperspectral formats.
+The package consists of three enhanced core modules:
+- core: Foundation classes with spectral cropping and wavelength mapping
+- preprocessing: Optimized pipelines with intelligent wavelength handling
+- utils: Enhanced utilities with noise analysis and data extraction functions
+
+Optimized for PSI VNIR/SWIR/MSC cameras and close-range vegetation applications.
 """
 
 # Import main classes and functions for easy access
@@ -36,8 +44,8 @@ from .utils import (
 
 
 # Version info
-__version__ = "1.0.0"
-__author__ = "Ivan Kashkan"
+__version__ = "2.0.0"
+__author__ = "Ivan Kashkan, HSI_PSI Development Team"
 __email__ = "kashkan@psi.cz"
 
 # Define what gets imported with "from HSI_PSI import *"

@@ -30,14 +30,22 @@ class HS_preprocessor:
     - Updated run_full_pipeline with mask extraction as final step
     - Updated process_folder with mask integration
     
-    Processing Pipeline:
-    1. Spectral range cropping (wavelength selection) [NEW - FIRST STEP]
-    2. Sensor calibration (white/dark reference correction)
-    3. Solar spectrum correction (using reference teflon)  
-    4. Spectral smoothing (Gaussian filtering)
-    5. Spectral spike removal (dead pixel correction)
-    6. Normalization (wavelength-based or SNV)
-    7. Mask extraction (vegetation index segmentation)
+    Optimized Processing Pipeline:
+    1. Sensor calibration (raw counts → physical reflectance)
+    2. Spike removal (fix instrumental artifacts early)
+    3. Spectral range cropping (focus on spectral range of interest)
+    4. Solar spectrum correction (illumination normalization)  
+    5. Spectral smoothing (noise reduction)
+    6. Normalization (data standardization)
+    7. Mask extraction (vegetation segmentation)
+    
+    Pipeline Order Rationale:
+    - Sensor calibration first: converts raw data to physical units
+    - Spike removal early: removes artifacts before they propagate
+    - Spectral cropping after initial processing: preserves context for calibration
+    - Solar correction on focused range: more efficient processing
+    - Smoothing before normalization: preserves relative intensities
+    - Masking last: uses fully processed data for accurate indices
     
     Features:
     - Step-by-step processing with configuration storage
@@ -235,7 +243,7 @@ class HS_preprocessor:
     
     def extract_masks(self, pri_thr=None, ndvi_thr=None, hbsi_thr=None, min_pix_size=None, 
                      repeat=10, show_visualization=True):
-        """Step 6: Extract vegetation masks using vegetation indices."""
+        """Step 7: Extract vegetation masks using vegetation indices."""
         
         # Use parameters from loaded config if available, otherwise use provided parameters or hardcoded defaults
         if pri_thr is None:
@@ -428,13 +436,13 @@ class HS_preprocessor:
         
         if self.verbose:
             print("🔄 Running full preprocessing pipeline...")
-            steps_to_run = ['spectral_cropping', 'sensor_calibration', 'spike_removal', 'solar_correction', 'spectral_smoothing', 'normalization']
+            steps_to_run = ['sensor_calibration', 'spike_removal', 'spectral_cropping', 'solar_correction', 'spectral_smoothing', 'normalization']
             if extract_masks_flag:
                 steps_to_run.append('mask_extraction')
             print(f"Pipeline steps: {steps_to_run}")
         
-        # Run preprocessing pipeline steps in order
-        pipeline_steps = ['spectral_cropping', 'sensor_calibration', 'spike_removal', 'solar_correction', 'spectral_smoothing', 'normalization']
+        # Run preprocessing pipeline steps in order (optimized sequence)
+        pipeline_steps = ['sensor_calibration', 'spike_removal', 'spectral_cropping', 'solar_correction', 'spectral_smoothing', 'normalization']
         
         for step in pipeline_steps:
             if step in pipeline_config:
@@ -443,17 +451,21 @@ class HS_preprocessor:
                 
                 step_params = pipeline_config[step].copy()
                 
-                # Handle spectral cropping
-                if step == 'spectral_cropping':
-                    self.crop_spectral_range(**step_params)
-                
-                # Handle sensor calibration
-                elif step == 'sensor_calibration':
+                # Handle sensor calibration (Step 1)
+                if step == 'sensor_calibration':
                     # Get white reference path from config
                     white_ref_path = step_params.pop('white_ref_path', None)
                     self.sensor_calibration(white_ref_path=white_ref_path, **step_params)
                 
-                # Handle solar correction
+                # Handle spike removal (Step 2)
+                elif step == 'spike_removal':
+                    self.remove_spectral_spikes(**step_params)
+                
+                # Handle spectral cropping (Step 3)
+                elif step == 'spectral_cropping':
+                    self.crop_spectral_range(**step_params)
+                
+                # Handle solar correction (Step 4)
                 elif step == 'solar_correction':
                     # Filter out metadata parameters that shouldn't be passed to the method
                     # These are computed internally and saved for reference but not method parameters
@@ -1079,7 +1091,7 @@ class HS_preprocessor:
     
     
     def crop_spectral_range(self, wl_start=None, wl_end=None, band_start=None, band_end=None):
-        """Step 1: Crop hyperspectral image to specified spectral range."""
+        """Step 3: Crop hyperspectral image to specified spectral range."""
         if self.image is None:
             raise ValueError("No image loaded. Call load_image() first.")
         
@@ -1116,7 +1128,7 @@ class HS_preprocessor:
         return self
     
     def sensor_calibration(self, white_ref_path=None, dark_calibration=False, clip_to=10):
-        """Step 2: Apply white reference calibration (transferred from readHS.py)."""
+        """Step 1: Apply white reference calibration (first step - converts raw counts to reflectance)."""
         if self.image is None:
             raise ValueError("No image loaded. Call load_image() first.")
         if self.image.calibrated == True:
@@ -1152,7 +1164,7 @@ class HS_preprocessor:
         return self
     
     def solar_correction(self, teflon_edge_coord=(-10, -3), reference_teflon=None, smooth_window=35):
-        """Step 3: Solar spectrum correction using side teflon panel."""
+        """Step 4: Solar spectrum correction using side teflon panel."""
         if self.image is None:
             raise ValueError("No image loaded.")
         if not hasattr(self.image, 'calibrated') or not self.image.calibrated:
@@ -1291,7 +1303,7 @@ class HS_preprocessor:
         return self
     
     def spectral_smoothing(self, sigma=11, mode='reflect'):
-        """Step 4: Apply Gaussian smoothing to reduce spectral noise."""
+        """Step 5: Apply Gaussian smoothing to reduce spectral noise."""
         if self.image is None:
             raise ValueError("No image loaded.")
         
@@ -1313,7 +1325,7 @@ class HS_preprocessor:
     
     def remove_spectral_spikes(self, win=7, k=6.0, replace="median"):
         """
-        Step 4.5: Detect and fix single-band spikes (dead pixels) in hyperspectral data.
+        Step 2: Detect and fix single-band spikes (dead pixels) in hyperspectral data.
         
         Applies spike detection and correction to every pixel spectrum in the hypercube.
         Uses local baseline estimation and robust statistics to identify spectral anomalies.
@@ -1470,7 +1482,7 @@ class HS_preprocessor:
         return cleaned, mask
     
     def normalization(self, to_wl=751, clip_to=10, method="to_wl"):
-        """Step 5: Final normalization to specific wavelength or SNV normalization."""
+        """Step 6: Final normalization to specific wavelength or SNV normalization."""
         if self.image is None:
             raise ValueError("No image loaded.")
         

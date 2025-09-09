@@ -551,3 +551,55 @@ def summarize_noisiest_bands(result, n=None):
         "signal_med": signal[idx],
     }
     return out
+
+
+def print_package_info() -> None:
+    """
+    Print comprehensive HSI_PSI package information including version,
+    features, and system details.
+    """
+    import platform
+    import sys
+    from datetime import datetime
+    
+    print("=" * 60)
+    print("HSI_PSI - Hyperspectral Image Processing Package")
+    print("=" * 60)
+    print(f"Version: 2.0.0")
+    print(f"Python: {sys.version.split()[0]}")
+    print(f"Platform: {platform.system()} {platform.release()}")
+    print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print()
+    
+    print("Key Features:")
+    print("  • Advanced spectral cropping with wavelength mapping")
+    print("  • Intelligent sensor calibration and solar correction")
+    print("  • Optimized 7-step processing pipeline")
+    print("  • Noise analysis and band ranking")
+    print("  • Automated mask extraction and vegetation indices")
+    print("  • Flexible configuration system")
+    print()
+    
+    print("Core Components:")
+    print("  • HS_image/MS_image classes for data handling")
+    print("  • HS_preprocessor for automated processing")
+    print("  • Utility functions for analysis and visualization")
+    print("  • Reference teflon library management")
+    print()
+    
+    print("Processing Pipeline:")
+    print("  1. Sensor calibration (dark current & flat field)")
+    print("  2. Spike removal (cosmic ray correction)")
+    print("  3. Spectral cropping (wavelength selection)")
+    print("  4. Solar irradiance correction")
+    print("  5. Spectral smoothing (noise reduction)")
+    print("  6. Reflectance normalization")
+    print("  7. Mask extraction (vegetation/non-vegetation)")
+    print()
+    
+    print("Use Cases:")
+    print("  • Close-range vegetation monitoring")
+    print("  • Plant stress detection and analysis")
+    print("  • Spectral signature characterization")
+    print("  • Agricultural phenotyping")
+    print("=" * 60)

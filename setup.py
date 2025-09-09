@@ -32,14 +32,19 @@ def get_version():
         for line in f:
             if line.startswith("__version__"):
                 return line.split("=")[1].strip().strip('"').strip("'")
-    return "1.0.0"
+    return "2.0.0"
+
+def print_package_info():
+    """Print HSI_PSI package information"""
+    print("HSI_PSI - Advanced Hyperspectral Image Analysis Library")
+    print("Optimized for close-range vegetation monitoring")
 
 setup(
     name="hsi-psi",
     version=get_version(),
     author="Ivan Kashkan",
     author_email="kashkan@psi.cz",
-    description="A comprehensive Python library for hyperspectral image analysis with advanced data manipulation methods, designed for simplicity and reproducibility in real-life HSI workflows",
+    description="Advanced Python library for hyperspectral image analysis with intelligent wavelength mapping, spectral cropping, and optimized processing pipelines for close-range vegetation monitoring",
     long_description=read_readme(),
     long_description_content_type="text/markdown",
     url="https://github.com/lamewarden/HSI_PSI",
@@ -47,11 +52,13 @@ setup(
         "Bug Reports": "https://github.com/lamewarden/HSI_PSI/issues",
         "Source": "https://github.com/lamewarden/HSI_PSI",
         "Documentation": "https://github.com/lamewarden/HSI_PSI#readme",
+        "Examples": "https://github.com/lamewarden/HSI_PSI/tree/main/examples",
     },
     packages=find_packages(),
     classifiers=[
-        "Development Status :: 4 - Beta",
+        "Development Status :: 5 - Production/Stable",
         "Intended Audience :: Science/Research",
+        "Intended Audience :: Education",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3",
@@ -60,8 +67,12 @@ setup(
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
         "Topic :: Scientific/Engineering :: Image Processing",
         "Topic :: Scientific/Engineering :: Visualization",
+        "Topic :: Scientific/Engineering :: Information Analysis",
+        "Topic :: Scientific/Engineering :: Agriculture",
+        "Natural Language :: English",
     ],
     python_requires=">=3.7",
     install_requires=read_requirements(),
@@ -72,17 +83,25 @@ setup(
             "flake8>=3.8.0",
             "twine>=3.4.0",
             "wheel>=0.36.0",
+            "jupyter>=1.0.0",
         ],
         "docs": [
             "sphinx>=4.0.0",
             "sphinx-rtd-theme>=0.5.0",
+            "myst-parser>=0.17.0",
+        ],
+        "analysis": [
+            "seaborn>=0.11.0",
+            "plotly>=5.0.0",
+            "ipywidgets>=7.6.0",
         ],
     },
     include_package_data=True,
     zip_safe=False,
-    keywords="hyperspectral imaging, remote sensing, spectral analysis, image processing, VNIR, SWIR",
+    keywords="hyperspectral imaging, remote sensing, spectral analysis, image processing, VNIR, SWIR, vegetation monitoring, agriculture, spectral cropping, wavelength mapping, close-range sensing",
     entry_points={
         "console_scripts": [
+            "hsi-psi-info=hsi_psi.utils:print_package_info",
         ],
     },
 )
