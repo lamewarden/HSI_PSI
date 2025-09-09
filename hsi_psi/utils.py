@@ -352,20 +352,20 @@ def _extract_cube_and_meta(hs_image, mask=None):
     Best-effort extractor for HSI_PSI.HS_image-like objects.
     Expects a spectral cube shaped (H, W, B).
     """
-    # cube
+    # cube - check for .img first (HSI_PSI convention)
     cube = None
-    for attr in ("cube", "data", "array", "X"):
+    for attr in ("img", "cube", "data", "array", "X"):
         if hasattr(hs_image, attr):
             arr = getattr(hs_image, attr)
             if isinstance(arr, np.ndarray) and arr.ndim == 3:
                 cube = arr
                 break
     if cube is None:
-        raise ValueError("Cannot locate 3D spectral cube on hs_image (tried .cube/.data/.array/.X).")
+        raise ValueError("Cannot locate 3D spectral cube on hs_image (tried .img/.cube/.data/.array/.X).")
 
-    # wavelengths (optional)
+    # wavelengths (optional) - check for .ind first (HSI_PSI convention)
     wl = None
-    for attr in ("wavelengths", "bands", "wl", "lambda_"):
+    for attr in ("ind", "wavelengths", "bands", "wl", "lambda_"):
         if hasattr(hs_image, attr):
             w = getattr(hs_image, attr)
             w = np.asarray(w).ravel()
