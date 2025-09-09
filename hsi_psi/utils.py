@@ -308,6 +308,12 @@ def create_config_template() -> Dict[str, Any]:
         >>> config['sensor_calibration']['clip_to'] = 15
     """
     template = {
+        'spectral_cropping': {
+            'wl_start': None,
+            'wl_end': None,
+            'band_start': None,
+            'band_end': None
+        },
         'sensor_calibration': {
             'clip_to': 10,
             'dark_calibration': False,

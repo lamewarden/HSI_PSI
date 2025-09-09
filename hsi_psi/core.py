@@ -229,6 +229,110 @@ class HS_image:
         # Reshape back to the original image dimensions
         self.img = snv_image.reshape(self.img.shape)
 
+    def crop_spectral_range(self, wl_start=None, wl_end=None, band_start=None, band_end=None):
+        """
+        Crop the hyperspectral image to a specified spectral range.
+        This should be the first step in any processing pipeline to ensure consistent spectral coverage.
+        
+        Parameters:
+        -----------
+        wl_start : int, optional
+            Starting wavelength in nm. If None, uses the first available wavelength.
+        wl_end : int, optional
+            Ending wavelength in nm. If None, uses the last available wavelength.
+        band_start : int, optional
+            Starting band index (alternative to wl_start). Takes precedence over wl_start.
+        band_end : int, optional
+            Ending band index (alternative to wl_end). Takes precedence over wl_end.
+            
+        Returns:
+        --------
+        self : HS_image
+            Returns self for method chaining.
+            
+        Notes:
+        ------
+        - Updates self.img, self.ind, self.bands, and self.hdr to match the cropped range
+        - All wavelengths outside the specified range are removed
+        - Band indices are adjusted to maintain consistency
+        
+        Example:
+        --------
+        >>> hs_img = HS_image("data.hdr")
+        >>> hs_img.crop_spectral_range(wl_start=450, wl_end=900)  # Keep only 450-900 nm
+        >>> hs_img.crop_spectral_range(band_start=10, band_end=50)  # Keep only bands 10-50
+        """
+        
+        # Determine the start and end indices
+        if band_start is not None:
+            start_idx = max(0, band_start)
+        elif wl_start is not None:
+            # Find closest wavelength index
+            start_idx = 0
+            for i, wl in enumerate(self.ind):
+                if wl >= wl_start:
+                    start_idx = i
+                    break
+        else:
+            start_idx = 0
+            
+        if band_end is not None:
+            end_idx = min(len(self.ind), band_end + 1)  # +1 for inclusive end
+        elif wl_end is not None:
+            # Find closest wavelength index
+            end_idx = len(self.ind)
+            for i, wl in enumerate(self.ind):
+                if wl > wl_end:
+                    end_idx = i
+                    break
+        else:
+            end_idx = len(self.ind)
+            
+        # Validate indices
+        if start_idx >= end_idx:
+            raise ValueError(f"Invalid spectral range: start_idx ({start_idx}) >= end_idx ({end_idx})")
+        if start_idx >= len(self.ind) or end_idx > len(self.ind):
+            raise ValueError(f"Indices out of range: available bands 0-{len(self.ind)-1}, requested {start_idx}-{end_idx-1}")
+            
+        # Store original range for logging
+        original_bands = len(self.ind)
+        original_wl_range = f"{self.ind[0]}-{self.ind[-1]} nm"
+        
+        # Crop the image data
+        self.img = self.img[:, :, start_idx:end_idx]
+        
+        # Update wavelength indices
+        self.ind = self.ind[start_idx:end_idx]
+        
+        # Update band count
+        self.bands = len(self.ind)
+        
+        # Update hdr if it exists
+        if hasattr(self, 'hdr') and self.hdr is not None:
+            try:
+                self.hdr = self.hdr[start_idx:end_idx]
+            except (IndexError, TypeError):
+                # If hdr format is incompatible, reconstruct it
+                self.hdr = self.ind.copy()
+                
+        # Update metadata if it exists
+        if hasattr(self, 'meta') and self.meta is not None and 'wavelength' in self.meta:
+            try:
+                # Update wavelength metadata
+                cropped_wavelengths = [str(wl) for wl in self.ind]
+                cropped_wavelengths.append('')  # ENVI format often has trailing empty string
+                self.meta['wavelength'] = cropped_wavelengths
+                self.meta['bands'] = str(self.bands)
+            except Exception:
+                pass  # If metadata update fails, continue without it
+        
+        # Log the cropping operation
+        new_wl_range = f"{self.ind[0]}-{self.ind[-1]} nm"
+        print(f"✓ Spectral range cropped: {original_wl_range} → {new_wl_range}")
+        print(f"  Bands: {original_bands} → {self.bands} (indices {start_idx}:{end_idx-1})")
+        
+        return self
+
 
 
     def flatten_to_df(self):

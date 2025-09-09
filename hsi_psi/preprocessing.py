@@ -31,12 +31,13 @@ class HS_preprocessor:
     - Updated process_folder with mask integration
     
     Processing Pipeline:
-    1. Sensor calibration (white/dark reference correction)
-    2. Solar spectrum correction (using reference teflon)  
-    3. Spectral smoothing (Gaussian filtering)
-    4. Spectral spike removal (dead pixel correction) [NEW]
-    5. Normalization (wavelength-based or SNV)
-    6. Mask extraction (vegetation index segmentation)
+    1. Spectral range cropping (wavelength selection) [NEW - FIRST STEP]
+    2. Sensor calibration (white/dark reference correction)
+    3. Solar spectrum correction (using reference teflon)  
+    4. Spectral smoothing (Gaussian filtering)
+    5. Spectral spike removal (dead pixel correction)
+    6. Normalization (wavelength-based or SNV)
+    7. Mask extraction (vegetation index segmentation)
     
     Features:
     - Step-by-step processing with configuration storage
@@ -294,13 +295,13 @@ class HS_preprocessor:
         
         if self.verbose:
             print("🔄 Running full preprocessing pipeline...")
-            steps_to_run = ['sensor_calibration', 'spike_removal', 'solar_correction', 'spectral_smoothing', 'normalization']
+            steps_to_run = ['spectral_cropping', 'sensor_calibration', 'spike_removal', 'solar_correction', 'spectral_smoothing', 'normalization']
             if extract_masks_flag:
                 steps_to_run.append('mask_extraction')
             print(f"Pipeline steps: {steps_to_run}")
         
         # Run preprocessing pipeline steps in order
-        pipeline_steps = ['sensor_calibration', 'spike_removal', 'solar_correction', 'spectral_smoothing', 'normalization']
+        pipeline_steps = ['spectral_cropping', 'sensor_calibration', 'spike_removal', 'solar_correction', 'spectral_smoothing', 'normalization']
         
         for step in pipeline_steps:
             if step in pipeline_config:
@@ -309,8 +310,12 @@ class HS_preprocessor:
                 
                 step_params = pipeline_config[step].copy()
                 
+                # Handle spectral cropping
+                if step == 'spectral_cropping':
+                    self.crop_spectral_range(**step_params)
+                
                 # Handle sensor calibration
-                if step == 'sensor_calibration':
+                elif step == 'sensor_calibration':
                     # Get white reference path from config
                     white_ref_path = step_params.pop('white_ref_path', None)
                     self.sensor_calibration(white_ref_path=white_ref_path, **step_params)
@@ -751,6 +756,12 @@ class HS_preprocessor:
     def create_config_template():
         """Create a template configuration dictionary for user to fill."""
         template = {
+            'spectral_cropping': {
+                'wl_start': None,  # Starting wavelength in nm, or None for no cropping
+                'wl_end': None,  # Ending wavelength in nm, or None for no cropping
+                'band_start': None,  # Starting band index (alternative to wl_start)
+                'band_end': None  # Ending band index (alternative to wl_end)
+            },
             'sensor_calibration': {
                 'clip_to': 10,  # Maximum reflectance value
                 'white_ref_path': None,  # Path to white reference, or None for auto-detection
@@ -918,6 +929,43 @@ class HS_preprocessor:
         return results
     
     
+    
+    def crop_spectral_range(self, wl_start=None, wl_end=None, band_start=None, band_end=None):
+        """Step 1: Crop hyperspectral image to specified spectral range."""
+        if self.image is None:
+            raise ValueError("No image loaded. Call load_image() first.")
+        
+        # Store original info for logging
+        original_bands = len(self.image.ind)
+        original_range = f"{self.image.ind[0]}-{self.image.ind[-1]} nm"
+        
+        # Apply spectral cropping using the core method
+        self.image.crop_spectral_range(
+            wl_start=wl_start, 
+            wl_end=wl_end, 
+            band_start=band_start, 
+            band_end=band_end
+        )
+        
+        # Store config and results
+        self.config['spectral_cropping'] = {
+            'wl_start': wl_start,
+            'wl_end': wl_end,
+            'band_start': band_start,
+            'band_end': band_end,
+            'original_bands': original_bands,
+            'original_range': original_range,
+            'cropped_bands': len(self.image.ind),
+            'cropped_range': f"{self.image.ind[0]}-{self.image.ind[-1]} nm"
+        }
+        self.step_results['spectral_cropped'] = copy.deepcopy(self.image)
+        
+        if self.verbose:
+            print(f"✓ Spectral range cropping completed")
+            print(f"  Range: {original_range} → {self.config['spectral_cropping']['cropped_range']}")
+            print(f"  Bands: {original_bands} → {len(self.image.ind)}")
+        
+        return self
     
     def sensor_calibration(self, white_ref_path=None, dark_calibration=False, clip_to=10):
         """Step 2: Apply white reference calibration (transferred from readHS.py)."""
