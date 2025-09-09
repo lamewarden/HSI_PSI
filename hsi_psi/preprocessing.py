@@ -79,23 +79,156 @@ class HS_preprocessor:
         return self
     
     def _upload_calibration(self, dark_calibration=None, white_ref_path=None):
-        """Upload white and dark calibration matrices."""
+        """Upload white and dark calibration matrices, mapped to current image wavelengths."""
+        # Get current image wavelengths
+        current_wavelengths = np.array(self.image.ind)
+        current_bands = len(current_wavelengths)
+        
         if white_ref_path:
             # Use external white reference
             white_calibration = HS_image(white_ref_path)
-            white_matrix = np.mean(white_calibration.img, axis=0)
-
-        
-        if dark_calibration:
-            # Use image edges as dark reference
-            dark_calib = HS_image(dark_calibration)  
-            dark_matrix = np.mean(dark_calib.img, axis=0)
+            white_cal_wavelengths = np.array(white_calibration.ind)
+            
+            if self.verbose:
+                print(f"  White calibration: {white_cal_wavelengths[0]}-{white_cal_wavelengths[-1]} nm ({len(white_cal_wavelengths)} bands)")
+                print(f"  Current image: {current_wavelengths[0]}-{current_wavelengths[-1]} nm ({current_bands} bands)")
+            
+            # Map wavelengths between calibration and current image
+            white_matrix = self._map_spectral_data(
+                white_calibration.img, 
+                white_cal_wavelengths, 
+                current_wavelengths,
+                operation='mean_spatial'
+            )
         else:
-            # Use image edges as dark reference
+            raise ValueError("white_ref_path must be provided for sensor calibration")
+
+        if dark_calibration:
+            # Use dark calibration file
+            dark_calib = HS_image(dark_calibration)
+            dark_cal_wavelengths = np.array(dark_calib.ind)
+            
+            if self.verbose:
+                print(f"  Dark calibration: {dark_cal_wavelengths[0]}-{dark_cal_wavelengths[-1]} nm ({len(dark_cal_wavelengths)} bands)")
+            
+            # Map wavelengths between calibration and current image
+            dark_matrix = self._map_spectral_data(
+                dark_calib.img, 
+                dark_cal_wavelengths, 
+                current_wavelengths,
+                operation='mean_spatial'
+            )
+        else:
+            # Use zeros as dark reference
             dark_matrix = np.zeros(white_matrix.shape)
 
-                
         return white_matrix, dark_matrix
+
+    def _map_spectral_data(self, source_data, source_wavelengths, target_wavelengths, operation='mean_spatial'):
+        """
+        Map spectral data from source wavelengths to target wavelengths using interpolation.
+        
+        Parameters:
+        -----------
+        source_data : np.ndarray
+            Source hyperspectral data (H, W, Bands) or (H, W) for 2D
+        source_wavelengths : np.ndarray
+            Wavelengths corresponding to source data
+        target_wavelengths : np.ndarray
+            Target wavelengths to map to
+        operation : str
+            'mean_spatial' - take spatial mean first, then interpolate
+            'interpolate_then_mean' - interpolate each pixel, then take spatial mean
+            'direct' - direct interpolation (for 1D data)
+            
+        Returns:
+        --------
+        np.ndarray
+            Mapped data with shape matching target wavelengths
+        """
+        from scipy.interpolate import interp1d
+        
+        if operation == 'mean_spatial':
+            # Take spatial mean first (reduces 3D to 1D), then interpolate
+            if source_data.ndim == 3:
+                source_spectrum = np.mean(source_data, axis=(0, 1))  # Shape: (source_bands,)
+            else:
+                source_spectrum = source_data
+                
+            # Create interpolation function
+            interp_func = interp1d(
+                source_wavelengths, 
+                source_spectrum, 
+                kind='linear', 
+                bounds_error=False, 
+                fill_value=0  # Use 0 for extrapolated values
+            )
+            
+            # Interpolate to target wavelengths
+            mapped_spectrum = interp_func(target_wavelengths)
+            
+            # Expand to match expected output shape (H, W)
+            if source_data.ndim == 3:
+                mapped_data = np.tile(mapped_spectrum, (source_data.shape[0], source_data.shape[1], 1))
+                mapped_data = np.mean(mapped_data, axis=(0, 1))  # Return as 1D for calibration matrices
+            else:
+                mapped_data = mapped_spectrum
+                
+        elif operation == 'interpolate_then_mean':
+            # Interpolate each pixel spectrum, then take spatial mean
+            if source_data.ndim != 3:
+                raise ValueError("interpolate_then_mean requires 3D source data")
+                
+            h, w, source_bands = source_data.shape
+            target_bands = len(target_wavelengths)
+            
+            # Prepare output array
+            interpolated_data = np.zeros((h, w, target_bands))
+            
+            # Create interpolation function
+            interp_func = interp1d(
+                source_wavelengths, 
+                source_data, 
+                axis=2,  # Interpolate along spectral axis
+                kind='linear', 
+                bounds_error=False, 
+                fill_value=0
+            )
+            
+            # Interpolate to target wavelengths
+            interpolated_data = interp_func(target_wavelengths)
+            
+            # Take spatial mean
+            mapped_data = np.mean(interpolated_data, axis=(0, 1))
+            
+        elif operation == 'direct':
+            # Direct interpolation for 1D data
+            interp_func = interp1d(
+                source_wavelengths, 
+                source_data, 
+                kind='linear', 
+                bounds_error=False, 
+                fill_value=0
+            )
+            mapped_data = interp_func(target_wavelengths)
+            
+        else:
+            raise ValueError(f"Unknown operation: {operation}")
+            
+        # Report mapping results
+        if self.verbose:
+            overlap_start = max(source_wavelengths[0], target_wavelengths[0])
+            overlap_end = min(source_wavelengths[-1], target_wavelengths[-1])
+            overlap_bands = np.sum((target_wavelengths >= overlap_start) & (target_wavelengths <= overlap_end))
+            total_target_bands = len(target_wavelengths)
+            
+            print(f"    ✓ Mapped {len(source_wavelengths)} → {len(target_wavelengths)} bands")
+            print(f"    Overlap: {overlap_start:.0f}-{overlap_end:.0f} nm ({overlap_bands}/{total_target_bands} bands)")
+            
+            if overlap_bands < total_target_bands * 0.8:  # Less than 80% overlap
+                print(f"    ⚠ Warning: Limited spectral overlap ({overlap_bands/total_target_bands*100:.1f}%)")
+                
+        return mapped_data
     
 
   

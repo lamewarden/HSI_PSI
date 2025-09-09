@@ -53,14 +53,72 @@ class HS_image:
 
 
     def upload_calibration(self, dc):
-        # upload wc
+        """Upload white and dark calibration matrices, mapped to current image wavelengths."""
+        from scipy.interpolate import interp1d
+        
+        # Get current image wavelengths
+        current_wavelengths = np.array(self.ind)
+        
+        # Upload white calibration
         white_calibration = HS_image(os.path.join(self.data_path[:-8] + "WhiteCalibration.hdr"))
-        white_matrix = np.mean(white_calibration.img, axis=0)
+        white_cal_wavelengths = np.array(white_calibration.ind)
+        
+        # Check if wavelength mapping is needed for white calibration
+        if not np.array_equal(white_cal_wavelengths, current_wavelengths):
+            print(f"Mapping white calibration: {white_cal_wavelengths[0]}-{white_cal_wavelengths[-1]} nm → {current_wavelengths[0]}-{current_wavelengths[-1]} nm")
+            
+            # Take spatial mean first, then interpolate
+            white_spectrum = np.mean(white_calibration.img, axis=(0, 1))
+            
+            # Create interpolation function
+            interp_func = interp1d(
+                white_cal_wavelengths, 
+                white_spectrum, 
+                kind='linear', 
+                bounds_error=False, 
+                fill_value=0  # Use 0 for extrapolated values
+            )
+            
+            # Interpolate to current wavelengths
+            white_matrix = interp_func(current_wavelengths)
+            
+            # Ensure we have valid data
+            if np.all(white_matrix == 0):
+                raise ValueError(f"No overlap between white calibration ({white_cal_wavelengths[0]}-{white_cal_wavelengths[-1]} nm) "
+                               f"and current image ({current_wavelengths[0]}-{current_wavelengths[-1]} nm)")
+        else:
+            # Direct spatial mean if wavelengths match
+            white_matrix = np.mean(white_calibration.img, axis=0)
+        
+        # Handle dark calibration
         if dc:
             dark_calibration = HS_image(os.path.join(self.data_path[:-8] + "DarkCalibration.hdr"))
-            dark_matrix = np.mean(dark_calibration.img, axis=0)
+            dark_cal_wavelengths = np.array(dark_calibration.ind)
+            
+            # Check if wavelength mapping is needed for dark calibration
+            if not np.array_equal(dark_cal_wavelengths, current_wavelengths):
+                print(f"Mapping dark calibration: {dark_cal_wavelengths[0]}-{dark_cal_wavelengths[-1]} nm → {current_wavelengths[0]}-{current_wavelengths[-1]} nm")
+                
+                # Take spatial mean first, then interpolate
+                dark_spectrum = np.mean(dark_calibration.img, axis=(0, 1))
+                
+                # Create interpolation function
+                interp_func = interp1d(
+                    dark_cal_wavelengths, 
+                    dark_spectrum, 
+                    kind='linear', 
+                    bounds_error=False, 
+                    fill_value=0
+                )
+                
+                # Interpolate to current wavelengths
+                dark_matrix = interp_func(current_wavelengths)
+            else:
+                # Direct spatial mean if wavelengths match
+                dark_matrix = np.mean(dark_calibration.img, axis=0)
         else:
             dark_matrix = np.zeros_like(white_matrix)
+            
         return white_matrix, dark_matrix
 
    
