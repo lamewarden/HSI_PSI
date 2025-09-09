@@ -460,7 +460,19 @@ def rank_noisy_bands(
         poly = max(1, min(poly, win - 1))
 
     # collect spectra over ROI
-    S = cube[m].astype(np.float64)  # (Npix, B)
+    # Ensure mask is 2D boolean array matching spatial dimensions
+    if m.ndim == 3:
+        # If mask is 3D, take first channel or flatten to 2D
+        if m.shape[2] == 1:
+            m = m[:, :, 0]
+        else:
+            m = m.any(axis=2)  # Any band marked as True
+    m = m.astype(bool)
+    
+    # Reshape cube to (Npix, B) and apply mask
+    cube_reshaped = cube.reshape(-1, B)  # (H*W, B)
+    mask_flat = m.flatten()  # (H*W,)
+    S = cube_reshaped[mask_flat].astype(np.float64)  # (Npix, B)
     if S.size == 0:
         raise ValueError("Mask selects zero pixels.")
 
