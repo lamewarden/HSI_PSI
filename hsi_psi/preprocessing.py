@@ -864,6 +864,10 @@ class HS_preprocessor:
         """Step 2: Apply white reference calibration (transferred from readHS.py)."""
         if self.image is None:
             raise ValueError("No image loaded. Call load_image() first.")
+        if self.image.calibrated == True:
+            if self.verbose:
+                print("Image already sensor calibrated. Skipping this step.")
+            return self
         
         # Get calibration matrices
         white_matrix, dark_matrix = self._upload_calibration(dark_calibration=dark_calibration, white_ref_path=white_ref_path)
@@ -899,6 +903,10 @@ class HS_preprocessor:
         if not hasattr(self.image, 'calibrated') or not self.image.calibrated:
             if self.verbose:
                 print("Warning: Image not sensor calibrated. Consider running sensor_calibration() first.")
+        if self.solar_correction_applied:
+            if self.verbose:
+                print("Solar correction already applied. Skipping this step.")
+            return self
         
         # Extract current teflon spectrum from image edge
         current_teflon = self.image.img[:, teflon_edge_coord[0]:teflon_edge_coord[1], :].mean(axis=(0,1))
@@ -1021,6 +1029,7 @@ class HS_preprocessor:
             'has_reference': reference_teflon is not None,
         }
         self.step_results['solar_corrected'] = copy.deepcopy(self.image)
+        self.solar_correction_applied = True
         
         if self.verbose:
             print(f"✓ Applied solar spectrum correction (window={smooth_window}, source={reference_source})")
