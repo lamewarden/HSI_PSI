@@ -1318,33 +1318,83 @@ class HS_preprocessor:
                 # Add colored ROI bounding boxes and labels on RGB image
                 for i, (roi_name, data) in enumerate(probed_spectra.items()):
                     slices = data["roi"]
-                    y_slice, x_slice = slices
+                    try:
+                        y_slice, x_slice = slices
+                    except Exception:
+                        # Skip invalid ROI specification
+                        continue
                     
-                    # Apply repeat amplification to y-coordinates to match stretched image
-                    y_start_stretched = y_slice.start * repeat
-                    y_stop_stretched = y_slice.stop * repeat
-                    x_start = x_slice.start
-                    x_stop = x_slice.stop
+                    # Determine image dimensions (stretched and original)
+                    img_h_stretched, img_w = rgb_img.shape[0], rgb_img.shape[1]
+                    # Derive original image height before vertical repeat
+                    original_h = img_h_stretched // max(1, repeat)
                     
-                    # Calculate center for text label
-                    y_center = ((y_slice.start + y_slice.stop) // 2) * repeat
-                    x_center = (x_slice.start + x_slice.stop) // 2
+                    # Resolve slice start/stop with Python-like negative index semantics and None handling
+                    def resolve_index(idx, dim):
+                        if idx is None:
+                            return 0 if dim == 'start' else None
+                        return idx
+                    
+                    y0 = y_slice.start if (y_slice.start is not None) else 0
+                    y1 = y_slice.stop if (y_slice.stop is not None) else original_h
+                    x0 = x_slice.start if (x_slice.start is not None) else 0
+                    x1 = x_slice.stop if (x_slice.stop is not None) else img_w
+                    
+                    # Support negative indices (relative to original image size)
+                    if isinstance(y0, int) and y0 < 0:
+                        y0 = original_h + y0
+                    if isinstance(y1, int) and y1 < 0:
+                        y1 = original_h + y1
+                    if isinstance(x0, int) and x0 < 0:
+                        x0 = img_w + x0
+                    if isinstance(x1, int) and x1 < 0:
+                        x1 = img_w + x1
+                    
+                    # Clamp indices to valid ranges
+                    y0 = int(max(0, min(y0, original_h)))
+                    y1 = int(max(0, min(y1, original_h)))
+                    x0 = int(max(0, min(x0, img_w)))
+                    x1 = int(max(0, min(x1, img_w)))
+                    
+                    # Convert to stretched coordinates for Y (rows were repeated)
+                    y_start_stretched = y0 * repeat
+                    y_stop_stretched = y1 * repeat
+                    
+                    # Ensure non-zero box size
+                    box_width = max(1, x1 - x0)
+                    box_height = max(1, y_stop_stretched - y_start_stretched)
+                    
+                    # Calculate center for text label (clamped to image)
+                    y_center = int((y_start_stretched + y_stop_stretched) // 2)
+                    x_center = int((x0 + x1) // 2)
+                    y_center = max(0, min(y_center, img_h_stretched - 1))
+                    x_center = max(0, min(x_center, img_w - 1))
                     
                     # Get the color for this ROI
                     color = colors[i]
                     
                     # Add colored bounding box rectangle
                     from matplotlib.patches import Rectangle
-                    rect = Rectangle((x_start, y_start_stretched), 
-                                   x_stop - x_start, 
-                                   y_stop_stretched - y_start_stretched,
+                    rect = Rectangle((x0, y_start_stretched), 
+                                   box_width, 
+                                   box_height,
                                    linewidth=3, edgecolor=color, facecolor='none', alpha=0.8)
                     ax1.add_patch(rect)
                     
-                    # Add colored text box
-                    ax1.text(x_center, y_start_stretched-5, roi_name, color=color, fontsize=12,
-                            ha='center', va='bottom'
-                            )
+                    # Add colored text box, prefer above the box but flip below if it would be outside figure
+                    text_y_above = y_start_stretched - 5
+                    if text_y_above > 0:
+                        text_va = 'bottom'
+                        text_y = text_y_above
+                    else:
+                        # place below the box if above would be outside
+                        text_va = 'top'
+                        text_y = y_stop_stretched + 5
+                        # clamp
+                        text_y = max(0, min(text_y, img_h_stretched - 1))
+                    
+                    ax1.text(x_center, text_y, roi_name, color=color, fontsize=12,
+                            ha='center', va=text_va)
                 
                 # Plot spectra with matching colors
                 for i, (roi_name, data) in enumerate(probed_spectra.items()):
