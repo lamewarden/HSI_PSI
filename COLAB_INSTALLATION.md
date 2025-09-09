@@ -3,12 +3,14 @@
 ## 🚀 **Quick Installation (Recommended)**
 
 ### **Method 1: Direct pip install from GitHub**
+
 ```python
 # In a Colab cell, run:
 !pip install git+https://github.com/lamewarden/HSI_PSI.git
 ```
 
 ### **Method 2: Install with specific branch/tag**
+
 ```python
 # Install specific version/tag
 !pip install git+https://github.com/lamewarden/HSI_PSI.git@v1.0.0
@@ -18,6 +20,7 @@
 ```
 
 ### **Method 3: Development install (if you plan to modify code)**
+
 ```python
 # Clone and install in editable mode
 !git clone https://github.com/lamewarden/HSI_PSI.git
@@ -69,16 +72,16 @@ After installation, test with this simple example:
 try:
     import hsi_psi
     print("✅ Package imported successfully")
-    
+  
     # Test version access
     print(f"📦 Version: {hsi_psi.__version__}")
-    
+  
     # Test class imports
     from hsi_psi import HS_image, HS_preprocessor
     print("✅ Main classes imported successfully")
-    
+  
     print("🎉 HSI_PSI is ready to use in Colab!")
-    
+  
 except ImportError as e:
     print(f"❌ Import failed: {e}")
 ```
@@ -86,6 +89,7 @@ except ImportError as e:
 ## 📁 **Working with Data in Colab**
 
 ### **Upload your hyperspectral data:**
+
 ```python
 from google.colab import files
 import os
@@ -99,6 +103,7 @@ for filename in uploaded.keys():
 ```
 
 ### **Example usage with uploaded data:**
+
 ```python
 # Assuming you uploaded 'sample.hdr' and 'sample.raw'
 from hsi_psi import HS_image, get_rgb_sample
@@ -117,8 +122,9 @@ rgb = get_rgb_sample(image, show=True, title="My Hyperspectral Image")
 ## 🔧 **Dependencies**
 
 The package will automatically install these dependencies:
+
 - numpy
-- pandas  
+- pandas
 - matplotlib
 - scikit-learn
 - scikit-image
@@ -129,6 +135,7 @@ The package will automatically install these dependencies:
 ## ⚠️ **Troubleshooting**
 
 ### **If installation fails:**
+
 ```python
 # Update pip first
 !pip install --upgrade pip
@@ -141,6 +148,7 @@ The package will automatically install these dependencies:
 ```
 
 ### **If import fails:**
+
 ```python
 # Restart runtime (Runtime > Restart runtime)
 # Then try importing again
@@ -176,6 +184,7 @@ print("🎉 Ready to process hyperspectral images!")
 ## 📚 **Next Steps**
 
 After installation, check out the examples in the repository:
+
 - `examples/basic_usage.py` - Basic usage examples
 - Repository README: https://github.com/lamewarden/HSI_PSI
 
