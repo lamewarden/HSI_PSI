@@ -24,6 +24,15 @@ from .core import (
     convert_header_to_envi
 )
 from .preprocessing import HS_preprocessor
+from .utils import (
+    get_rgb_sample,
+    extract_masks_from_hs_image,
+    extract_masked_spectra_to_df,
+    stretch_image,
+    create_config_template,
+    rank_noisy_bands,
+    summarize_noisiest_bands
+)
 
 
 # Version info
@@ -42,7 +51,14 @@ __all__ = [
     "get_hdr_images",
     "get_polygon_masks_from_json", 
     "standardize_image",
-    "convert_header_to_envi"
-
-
+    "convert_header_to_envi",
+    
+    # Additional utility functions from utils module
+    "get_rgb_sample",
+    "extract_masks_from_hs_image",
+    "extract_masked_spectra_to_df",
+    "stretch_image",
+    "create_config_template",
+    "rank_noisy_bands",
+    "summarize_noisiest_bands"
 ]
