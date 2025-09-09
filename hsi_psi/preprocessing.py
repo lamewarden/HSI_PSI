@@ -275,7 +275,7 @@ class HS_preprocessor:
 
         # Display all vegetation indices for calibration
         if show_visualization:
-            orig_rgb = self.get_rgb_sample(normalize=True, correct=False)
+            orig_rgb = self.get_rgb_sample(normalize=True, correct=False, show=False)
             
             fig, axes = plt.subplots(2, 3, figsize=(18, 6))
             fig.suptitle('Vegetation Indices for Threshold Calibration', fontsize=16, fontweight='bold')
@@ -422,6 +422,10 @@ class HS_preprocessor:
         if not hasattr(self, 'config') or not self.config:
             raise ValueError("No configuration loaded. Please run load_config() first.")
         
+        # Check if image is loaded
+        if not hasattr(self, 'image') or self.image is None:
+            raise ValueError("No image loaded. Please load an image first using load_image().")
+        
         # Deep copy config to avoid modifying original
         import copy
         pipeline_config = copy.deepcopy(self.config)
@@ -449,88 +453,102 @@ class HS_preprocessor:
                 if self.verbose:
                     print(f"Running {step}...")
                 
-                step_params = pipeline_config[step].copy()
-                
-                # Handle sensor calibration (Step 1)
-                if step == 'sensor_calibration':
-                    # Get white reference path from config
-                    white_ref_path = step_params.pop('white_ref_path', None)
-                    self.sensor_calibration(white_ref_path=white_ref_path, **step_params)
-                
-                # Handle spike removal (Step 2)
-                elif step == 'spike_removal':
-                    self.remove_spectral_spikes(**step_params)
-                
-                # Handle spectral cropping (Step 3)
-                elif step == 'spectral_cropping':
-                    self.crop_spectral_range(**step_params)
-                
-                # Handle solar correction (Step 4)
-                elif step == 'solar_correction':
-                    # Filter out metadata parameters that shouldn't be passed to the method
-                    # These are computed internally and saved for reference but not method parameters
-                    method_params = {k: v for k, v in step_params.items() 
-                                   if k not in ['reference_source', 'has_reference']}
+                try:
+                    step_params = pipeline_config[step].copy()
                     
-                    # Use loaded reference teflon if available
-                    if hasattr(self, 'reference_teflon') and self.reference_teflon is not None:
-                        if isinstance(self.reference_teflon, dict):
-                            # Check if it's the new wavelength-as-keys format
-                            if all(isinstance(k, (int, float)) for k in self.reference_teflon.keys()):
-                                # Extract spectrum from wavelength-as-keys format
-                                current_wavelengths = np.array(self.image.ind)
-                                ref_wavelengths = np.array(sorted(self.reference_teflon.keys()))
-                                ref_spectrum = np.array([self.reference_teflon[wl] for wl in ref_wavelengths])
-                                
-                                if np.array_equal(ref_wavelengths, current_wavelengths):
-                                    method_params['reference_teflon'] = ref_spectrum
+                    # Handle sensor calibration (Step 1)
+                    if step == 'sensor_calibration':
+                        # Get white reference path from config
+                        white_ref_path = step_params.pop('white_ref_path', None)
+                        self.sensor_calibration(white_ref_path=white_ref_path, **step_params)
+                    
+                    # Handle spike removal (Step 2)
+                    elif step == 'spike_removal':
+                        self.remove_spectral_spikes(**step_params)
+                    
+                    # Handle spectral cropping (Step 3)
+                    elif step == 'spectral_cropping':
+                        self.crop_spectral_range(**step_params)
+                    
+                    # Handle solar correction (Step 4)
+                    elif step == 'solar_correction':
+                        # Filter out metadata parameters that shouldn't be passed to the method
+                        # These are computed internally and saved for reference but not method parameters
+                        method_params = {k: v for k, v in step_params.items() 
+                                       if k not in ['reference_source', 'has_reference']}
+                        
+                        # Use loaded reference teflon if available
+                        if hasattr(self, 'reference_teflon') and self.reference_teflon is not None:
+                            if isinstance(self.reference_teflon, dict):
+                                # Check if it's the new wavelength-as-keys format
+                                if all(isinstance(k, (int, float)) for k in self.reference_teflon.keys()):
+                                    # Extract spectrum from wavelength-as-keys format
+                                    current_wavelengths = np.array(self.image.ind)
+                                    ref_wavelengths = np.array(sorted(self.reference_teflon.keys()))
+                                    ref_spectrum = np.array([self.reference_teflon[wl] for wl in ref_wavelengths])
+                                    
+                                    if np.array_equal(ref_wavelengths, current_wavelengths):
+                                        method_params['reference_teflon'] = ref_spectrum
+                                    else:
+                                        # Interpolate to match current wavelengths
+                                        from scipy.interpolate import interp1d
+                                        interp_func = interp1d(ref_wavelengths, ref_spectrum, 
+                                                             kind='linear', bounds_error=False, fill_value='extrapolate')
+                                        method_params['reference_teflon'] = interp_func(current_wavelengths)
+                                elif 'spectrum' in self.reference_teflon:
+                                    # Legacy dictionary format
+                                    method_params['reference_teflon'] = self.reference_teflon['spectrum']
                                 else:
-                                    # Interpolate to match current wavelengths
-                                    from scipy.interpolate import interp1d
-                                    interp_func = interp1d(ref_wavelengths, ref_spectrum, 
-                                                         kind='linear', bounds_error=False, fill_value='extrapolate')
-                                    method_params['reference_teflon'] = interp_func(current_wavelengths)
-                            elif 'spectrum' in self.reference_teflon:
-                                # Legacy dictionary format
-                                method_params['reference_teflon'] = self.reference_teflon['spectrum']
+                                    # Unknown dict format
+                                    if self.verbose:
+                                        print("  ⚠ Warning: Unknown reference teflon dictionary format")
                             else:
-                                # Unknown dict format
-                                if self.verbose:
-                                    print("  ⚠ Warning: Unknown reference teflon dictionary format")
-                        else:
-                            # Legacy array format
-                            method_params['reference_teflon'] = self.reference_teflon
-                    self.solar_correction(**method_params)
-                
-                # Handle spectral smoothing
-                elif step == 'spectral_smoothing':
-                    self.spectral_smoothing(**step_params)
-                
-                # Handle spike removal
-                elif step == 'spike_removal':
-                    self.remove_spectral_spikes(**step_params)
-                
-                # Handle normalization
-                elif step == 'normalization':
-                    self.normalization(**step_params)
+                                # Legacy array format
+                                method_params['reference_teflon'] = self.reference_teflon
+                        self.solar_correction(**method_params)
+                    
+                    # Handle spectral smoothing (Step 5)
+                    elif step == 'spectral_smoothing':
+                        self.spectral_smoothing(**step_params)
+                    
+                    # Handle normalization (Step 6)
+                    elif step == 'normalization':
+                        self.normalization(**step_params)
+                        
+                except Exception as e:
+                    error_msg = f"Error in pipeline step '{step}': {str(e)}"
+                    if self.verbose:
+                        print(f"❌ {error_msg}")
+                        import traceback
+                        traceback.print_exc()
+                    raise RuntimeError(error_msg) from e
         
         # Run mask extraction as final step if requested
         if extract_masks_flag:
             if self.verbose:
                 print(f"Running mask_extraction...")
             
-            # Use mask extraction parameters from config, or defaults
-            mask_params = pipeline_config.get('mask_extraction', {
-                'pri_thr': -0.1,
-                'ndvi_thr': 0.2,
-                'hbsi_thr': -0.6,
-                'min_pix_size': 2
-            })
-            
-            # Don't show visualization in batch processing unless verbose
-            mask_params['show_visualization'] = self.verbose
-            
-            self.extract_masks(**mask_params)
+            try:
+                # Use mask extraction parameters from config, or defaults
+                mask_params = pipeline_config.get('mask_extraction', {
+                    'pri_thr': -0.1,
+                    'ndvi_thr': 0.2,
+                    'hbsi_thr': -0.6,
+                    'min_pix_size': 2
+                })
+                
+                # Don't show visualization in batch processing unless verbose
+                mask_params['show_visualization'] = self.verbose
+                
+                self.extract_masks(**mask_params)
+                
+            except Exception as e:
+                error_msg = f"Error in mask extraction: {str(e)}"
+                if self.verbose:
+                    print(f"❌ {error_msg}")
+                    import traceback
+                    traceback.print_exc()
+                raise RuntimeError(error_msg) from e
         
         if self.verbose:
             print("Full pipeline completed successfully!")
@@ -538,6 +556,62 @@ class HS_preprocessor:
                 print(f"Mask stored in image.mask attribute")
             
         return self
+    
+    def debug_pipeline_state(self):
+        """
+        Print detailed information about the current pipeline state for debugging.
+        """
+        print("=" * 60)
+        print("HSI_PSI PIPELINE DEBUG INFORMATION")
+        print("=" * 60)
+        
+        # Image information
+        print("🖼️ IMAGE STATE:")
+        if hasattr(self, 'image') and self.image is not None:
+            print(f"  ✅ Image loaded: {type(self.image).__name__}")
+            print(f"  📐 Image shape: {self.image.img.shape}")
+            print(f"  📊 Data type: {self.image.img.dtype}")
+            print(f"  📈 Value range: {self.image.img.min():.4f} - {self.image.img.max():.4f}")
+            print(f"  🌈 Wavelengths: {len(self.image.ind)} bands ({self.image.ind[0]:.1f} - {self.image.ind[-1]:.1f} nm)")
+            if hasattr(self.image, 'mask'):
+                print(f"  🎭 Mask available: {self.image.mask.shape}")
+        else:
+            print("  ❌ No image loaded")
+        
+        # Configuration state
+        print("\n⚙️ CONFIGURATION STATE:")
+        if hasattr(self, 'config') and self.config:
+            print(f"  ✅ Config loaded with {len(self.config)} sections:")
+            for section in self.config:
+                print(f"    - {section}")
+        else:
+            print("  ❌ No configuration loaded")
+            
+        # Reference teflon state
+        print("\n🔬 REFERENCE TEFLON STATE:")
+        if hasattr(self, 'reference_teflon') and self.reference_teflon is not None:
+            if isinstance(self.reference_teflon, dict):
+                print(f"  ✅ Reference loaded as dictionary")
+                if all(isinstance(k, (int, float)) for k in self.reference_teflon.keys()):
+                    wl_keys = sorted(self.reference_teflon.keys())
+                    print(f"  📊 Wavelength range: {wl_keys[0]:.1f} - {wl_keys[-1]:.1f} nm ({len(wl_keys)} points)")
+                else:
+                    print(f"  📊 Legacy format with keys: {list(self.reference_teflon.keys())}")
+            else:
+                print(f"  ✅ Reference loaded as array: {len(self.reference_teflon)} values")
+        else:
+            print("  ❌ No reference teflon loaded")
+        
+        # Processing history
+        print("\n📜 PROCESSING HISTORY:")
+        if hasattr(self, 'step_results') and self.step_results:
+            print(f"  ✅ {len(self.step_results)} steps completed:")
+            for step in self.step_results:
+                print(f"    - {step}")
+        else:
+            print("  📝 No processing steps completed yet")
+            
+        print("=" * 60)
     
     def get_step_result(self, step_name):
         """Get the HS_image result from a specific processing step."""
