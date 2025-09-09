@@ -464,7 +464,10 @@ class HS_preprocessor:
                     
                     # Handle spike removal (Step 2)
                     elif step == 'spike_removal':
-                        self.remove_spectral_spikes(**step_params)
+                        # Filter out metadata parameters that shouldn't be passed to the method
+                        method_params = {k: v for k, v in step_params.items() 
+                                       if k not in ['spikes_detected']}
+                        self.remove_spectral_spikes(**method_params)
                     
                     # Handle spectral cropping (Step 3)
                     elif step == 'spectral_cropping':

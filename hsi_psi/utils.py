@@ -319,6 +319,11 @@ def create_config_template() -> Dict[str, Any]:
             'dark_calibration': False,
             'white_ref_path': None
         },
+        'spike_removal': {
+            'win': 7,
+            'k': 6.0,
+            'replace': 'median'
+        },
         'solar_correction': {
             'teflon_edge_coord': [-10, -3],
             'smooth_window': 35
