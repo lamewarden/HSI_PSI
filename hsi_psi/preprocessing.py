@@ -290,12 +290,57 @@ class HS_preprocessor:
         
         # Calculate vegetation indices
         ndvi_image = (self.image[751] - self.image[670]) / (self.image[751] + self.image[670] + 1e-7)
-        ndvi_mask = (ndvi_image > ndvi_thr)[:,:,np.newaxis]
-        
         hbsi_image = (self.image[470] - self.image[751]) / (self.image[470] + self.image[751] + 1e-7)
-        hbsi_mask = (hbsi_image > hbsi_thr)[:,:,np.newaxis]
-
         pri_image = (self.image[531] - self.image[570]) / (self.image[531] + self.image[570] + 1e-7)
+        
+        # Automatic outlier removal (inf, nan, and 5-sigma outliers)
+        def clean_vi_outliers(vi_image, name, sigma=5):
+            """Clean vegetation index from inf, nan, and statistical outliers."""
+            original_shape = vi_image.shape
+            
+            # Remove inf and nan
+            vi_cleaned = vi_image.copy()
+            vi_cleaned[np.isinf(vi_cleaned)] = np.nan
+            
+            # Get valid (finite) values for statistics
+            valid_mask = np.isfinite(vi_cleaned)
+            if np.sum(valid_mask) == 0:
+                if self.verbose:
+                    print(f"  ⚠️ Warning: All {name} values are invalid")
+                return vi_image  # Return original if all invalid
+            
+            valid_values = vi_cleaned[valid_mask]
+            mean_val = np.mean(valid_values)
+            std_val = np.std(valid_values)
+            
+            # Define outlier bounds (5-sigma)
+            lower_bound = mean_val - sigma * std_val
+            upper_bound = mean_val + sigma * std_val
+            
+            # Count outliers before removal
+            outliers_mask = (vi_cleaned < lower_bound) | (vi_cleaned > upper_bound) | ~valid_mask
+            n_outliers = np.sum(outliers_mask)
+            total_pixels = vi_cleaned.size
+            
+            # Replace outliers with median of valid values
+            median_val = np.median(valid_values)
+            vi_cleaned[outliers_mask] = median_val
+            
+            if self.verbose and n_outliers > 0:
+                print(f"  🧹 {name}: Cleaned {n_outliers}/{total_pixels} outliers ({100*n_outliers/total_pixels:.1f}%)")
+                print(f"    Range before: [{np.nanmin(vi_image):.3f}, {np.nanmax(vi_image):.3f}]")
+                print(f"    Range after: [{np.nanmin(vi_cleaned):.3f}, {np.nanmax(vi_cleaned):.3f}]")
+            
+            return vi_cleaned
+        
+        # Clean all vegetation indices
+        ndvi_image = clean_vi_outliers(ndvi_image, "NDVI")
+        hbsi_image = clean_vi_outliers(hbsi_image, "HBSI") 
+        pri_image = clean_vi_outliers(pri_image, "PRI")
+        
+        # Create masks after cleaning
+        ndvi_mask = (ndvi_image > ndvi_thr)[:,:,np.newaxis]
+        hbsi_mask = (hbsi_image > hbsi_thr)[:,:,np.newaxis]
         pri_mask = (pri_image < pri_thr)[:,:,np.newaxis]
 
         # Display all vegetation indices for calibration
@@ -1591,7 +1636,7 @@ class HS_preprocessor:
         # Get image dimensions
         rows, cols, bands = self.image.img.shape
         total_pixels = rows * cols
-        spike_count = 0
+
         
         # Process each pixel spectrum
         for i in range(rows):
@@ -1612,20 +1657,17 @@ class HS_preprocessor:
                 self.image.img[i, j, :] = cleaned_spectrum
                 
                 # Count spikes for reporting
-                spike_count += np.sum(spike_mask)
+
         
         # Store configuration and results
         self.config['spike_removal'] = {
             'win': win, 
             'k': k, 
-            'replace': replace,
-            'spikes_detected': int(spike_count)
+            'replace': replace
+
         }
         self.step_results['spike_removed'] = copy.deepcopy(self.image)
         
-        if self.verbose:
-            spike_rate = spike_count / (total_pixels * bands) * 100
-            print(f"✓ Removed {spike_count} spectral spikes ({spike_rate:.3f}% of all measurements)")
         
         return self
     
