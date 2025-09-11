@@ -611,3 +611,106 @@ def print_package_info() -> None:
     print("  • Spectral signature characterization")
     print("  • Agricultural phenotyping")
     print("=" * 60)
+
+
+def plot_spectra(spectra_dicts_list, dict_names=None, scale=False, 
+                 title="Multiple Spectra Comparison", figure_size=(12, 8), x_axis=None):
+    """
+    Plot multiple spectra from a list of dictionaries (format from spectrum_probe).
+    
+    Args:
+        spectra_dicts_list: List of dictionaries, each containing spectra data 
+                          (format from spectrum_probe output)
+        dict_names: List of names for each dictionary. If None, uses "Dataset 1", "Dataset 2", etc.
+        scale: If True, scale all spectra to have the same maximum value as the first spectrum
+        title: Title for the plot
+        figure_size: Tuple of (width, height) for the figure size
+        x_axis: Array or list of x-axis values to plot against. If None, uses wavelengths from spectra data.
+                Length must match the spectrum length.
+        
+    Example:
+        # Get spectra from different images
+        spectra1 = preprocessor1.spectrum_probe(rois=rois, show=False)
+        spectra2 = preprocessor2.spectrum_probe(rois=rois, show=False) 
+        
+        # Plot them together with default wavelengths
+        from hsi_psi.utils import plot_spectra
+        plot_spectra([spectra1, spectra2], 
+                    dict_names=["Image 1", "Image 2"],
+                    scale=True)
+        
+        # Plot with custom x-axis (e.g., wavenumbers)
+        custom_x = np.linspace(400, 1000, len(spectra1[list(spectra1.keys())[0]]["spectrum"]))
+        plot_spectra([spectra1, spectra2], 
+                    dict_names=["Image 1", "Image 2"],
+                    x_axis=custom_x,
+                    scale=True)
+    """
+    if not spectra_dicts_list:
+        raise ValueError("spectra_dicts_list cannot be empty")
+    
+    # Generate default names if not provided
+    if dict_names is None:
+        dict_names = [f"Dataset {i+1}" for i in range(len(spectra_dicts_list))]
+    elif len(dict_names) != len(spectra_dicts_list):
+        raise ValueError("Length of dict_names must match length of spectra_dicts_list")
+    
+    # Create figure
+    plt.figure(figsize=figure_size)
+    
+    # Get a colormap with enough colors
+    colors = plt.cm.tab10(np.linspace(0, 1, 10))  # 10 distinct colors
+    color_idx = 0
+    
+    # Find reference spectrum for scaling if needed
+    reference_spectrum = None
+    reference_max = None
+    if scale:
+        # Use first spectrum from first dataset as reference
+        first_dict = spectra_dicts_list[0]
+        if first_dict:
+            first_key = next(iter(first_dict.keys()))
+            reference_spectrum = first_dict[first_key]["spectrum"]
+            reference_max = np.max(reference_spectrum)
+    
+    # Plot each dataset
+    for dict_idx, (spectra_dict, dataset_name) in enumerate(zip(spectra_dicts_list, dict_names)):
+        if not spectra_dict:
+            continue
+            
+        # Plot each spectrum in the dictionary
+        for roi_name, data in spectra_dict.items():
+            spectrum = data["spectrum"]
+            wavelengths = data["wavelengths"]
+            
+            # Use custom x_axis if provided, otherwise use wavelengths from data
+            if x_axis is not None:
+                x_values = np.array(x_axis)
+                if len(x_values) != len(spectrum):
+                    raise ValueError(f"Length of x_axis ({len(x_values)}) must match spectrum length ({len(spectrum)})")
+            else:
+                x_values = wavelengths
+            
+            # Apply scaling if requested
+            if scale and reference_max is not None:
+                current_max = np.max(spectrum)
+                if current_max > 0:  # Avoid division by zero
+                    scale_factor = reference_max / current_max
+                    spectrum = spectrum * scale_factor
+            
+            # Create label combining dataset name and ROI name
+            label = f"{dataset_name} - {roi_name}"
+            
+            # Plot with unique color
+            color = colors[color_idx % len(colors)]
+            plt.plot(x_values, spectrum, color=color, label=label, linewidth=2)
+            color_idx += 1
+    
+    # Customize plot
+    plt.xlabel('Wavelength (nm)')
+    plt.ylabel('Reflectance' + (' (scaled)' if scale else ''))
+    plt.title(title)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()

@@ -2252,8 +2252,6 @@ class HS_preprocessor:
         else:
             return rgb_img
 
-
-
     
     
     @staticmethod
