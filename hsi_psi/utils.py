@@ -693,7 +693,7 @@ def plot_spectra(spectra_dicts_list, dict_names=None, scale=False,
     plt.xlabel('Wavelength (nm)')
     plt.ylabel('Reflectance' + (' (scaled)' if scale else ''))
     plt.title(title)
-    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.show()
