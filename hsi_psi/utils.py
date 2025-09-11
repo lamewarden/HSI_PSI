@@ -718,3 +718,61 @@ def vis_clust_2D(X, pc_to_visualize):
 
     # Show the plot
     plt.show()
+
+def plot_confusion_matrix(y_true, y_pred, class_names=None, fig_size=(8,6)):
+    """
+    Plot a confusion matrix with absolute counts and row-wise percentages.
+    The percentage values are displayed in a smaller font.
+    
+    Args:
+        y_true (array-like): Ground truth labels.
+        y_pred (array-like): Predicted labels.
+        class_names (list, optional): List of class names (strings).
+            If None, indices [0..n_classes-1] will be used.
+        fig_size (tuple, optional): Figure size in inches. Default is (8, 6).
+    """
+    cm = confusion_matrix(y_true, y_pred)
+    n_classes = cm.shape[0]
+
+    # If no class names are provided, just use numeric class indices
+    if class_names is None:
+        class_names = [str(i) for i in range(n_classes)]
+    
+    # Compute row-wise percentages
+    cm_percent = np.zeros_like(cm, dtype=float)
+    for i in range(n_classes):
+        row_sum = cm[i].sum()
+        if row_sum != 0:
+            cm_percent[i] = cm[i] / row_sum * 100
+        else:
+            cm_percent[i] = 0
+
+    fig, ax = plt.subplots(figsize=fig_size)
+    cax = ax.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
+    plt.title('Confusion Matrix')
+    plt.colorbar(cax)
+
+    # Set tick marks and labels
+    ax.set_xticks(np.arange(n_classes))
+    ax.set_yticks(np.arange(n_classes))
+    ax.set_xticklabels(class_names, rotation=45, ha='right')
+    ax.set_yticklabels(class_names)
+
+    # Determine threshold for text color
+    threshold = cm.max() / 2.
+
+    # Loop over data dimensions and create text annotations.
+    for i in range(n_classes):
+        for j in range(n_classes):
+            abs_val = cm[i, j]
+            perc_val = cm_percent[i, j]
+            color = 'white' if abs_val > threshold else 'black'
+            # Place absolute count above center
+            ax.text(j, i - 0.2, f"{abs_val}", ha='center', va='center', color=color, fontsize=12)
+            # Place percentage value below center in a smaller font
+            ax.text(j, i + 0.2, f"{perc_val:.1f}%", ha='center', va='center', color=color, fontsize=8)
+
+    ax.set_ylabel('True label')
+    ax.set_xlabel('Predicted label')
+    plt.tight_layout()
+    plt.show()
