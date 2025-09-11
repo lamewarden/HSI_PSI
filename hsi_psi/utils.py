@@ -697,3 +697,24 @@ def plot_spectra(spectra_dicts_list, dict_names=None, scale=False,
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.show()
+
+def vis_clust_2D(X, pc_to_visualize):
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    # Map unique labels to integer values to color them
+    unique_labels = X['label'].unique()
+    label_mapping = {label: i for i, label in enumerate(unique_labels)}
+    colors = X['label'].map(label_mapping)
+
+    # Create a scatter plot, color by 'label' column values
+    scatter = ax.scatter(x=X.iloc[:, pc_to_visualize[0]], y=X.iloc[:, pc_to_visualize[1]], c=colors, cmap='rainbow')
+
+    # Create a legend with the actual 'label' values
+    handles, _ = scatter.legend_elements()
+    labels = [str(label) for label in unique_labels]
+    ax.legend(handles=handles, labels=labels, title="Label")
+    plt.xlabel(f'PC{pc_to_visualize[0]}')
+    plt.ylabel(f'PC{pc_to_visualize[1]}')
+
+    # Show the plot
+    plt.show()
