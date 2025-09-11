@@ -614,7 +614,7 @@ def print_package_info() -> None:
 
 
 def plot_spectra(spectra_dicts_list, dict_names=None, scale=False, 
-                 title="Multiple Spectra Comparison", figure_size=(12, 8), x_axis=None):
+                 title="Multiple Spectra Comparison", figure_size=(12, 8)):
     """
     Plot multiple spectra from a list of dictionaries (format from spectrum_probe).
     
@@ -625,25 +625,16 @@ def plot_spectra(spectra_dicts_list, dict_names=None, scale=False,
         scale: If True, scale all spectra to have the same maximum value as the first spectrum
         title: Title for the plot
         figure_size: Tuple of (width, height) for the figure size
-        x_axis: Array or list of x-axis values to plot against. If None, uses wavelengths from spectra data.
-                Length must match the spectrum length.
         
     Example:
         # Get spectra from different images
         spectra1 = preprocessor1.spectrum_probe(rois=rois, show=False)
         spectra2 = preprocessor2.spectrum_probe(rois=rois, show=False) 
         
-        # Plot them together with default wavelengths
+        # Plot them together
         from hsi_psi.utils import plot_spectra
         plot_spectra([spectra1, spectra2], 
                     dict_names=["Image 1", "Image 2"],
-                    scale=True)
-        
-        # Plot with custom x-axis (e.g., wavenumbers)
-        custom_x = np.linspace(400, 1000, len(spectra1[list(spectra1.keys())[0]]["spectrum"]))
-        plot_spectra([spectra1, spectra2], 
-                    dict_names=["Image 1", "Image 2"],
-                    x_axis=custom_x,
                     scale=True)
     """
     if not spectra_dicts_list:
@@ -683,14 +674,6 @@ def plot_spectra(spectra_dicts_list, dict_names=None, scale=False,
             spectrum = data["spectrum"]
             wavelengths = data["wavelengths"]
             
-            # Use custom x_axis if provided, otherwise use wavelengths from data
-            if x_axis is not None:
-                x_values = np.array(x_axis)
-                if len(x_values) != len(spectrum):
-                    raise ValueError(f"Length of x_axis ({len(x_values)}) must match spectrum length ({len(spectrum)})")
-            else:
-                x_values = wavelengths
-            
             # Apply scaling if requested
             if scale and reference_max is not None:
                 current_max = np.max(spectrum)
@@ -703,7 +686,7 @@ def plot_spectra(spectra_dicts_list, dict_names=None, scale=False,
             
             # Plot with unique color
             color = colors[color_idx % len(colors)]
-            plt.plot(x_values, spectrum, color=color, label=label, linewidth=2)
+            plt.plot(wavelengths, spectrum, color=color, label=label, linewidth=2)
             color_idx += 1
     
     # Customize plot
