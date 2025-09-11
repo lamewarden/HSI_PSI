@@ -1230,7 +1230,7 @@ class HS_preprocessor:
     @staticmethod
     def process_folder(folder_path, white_ref_path=None, reference_teflon=None, 
                       config=None, config_path=None, pattern="*Data.hdr", verbose=True,
-                      extract_masks=True):
+                      extract_masks=True, return_df=False):
         """
         Process all hyperspectral images in a folder with integrated mask extraction.
         
@@ -1243,9 +1243,13 @@ class HS_preprocessor:
             pattern (str): File pattern to match (default: "*Data.hdr")
             verbose (bool): Enable verbose output
             extract_masks (bool): Whether to extract masks as final step
+            return_df (bool): If True, return concatenated DataFrame instead of images dict.
+                             This processes images one by one to avoid memory overflow.
             
         Returns:
-            dict: Dictionary of processed images with masks {filename: HS_image}
+            dict or pd.DataFrame: 
+                - If return_df=False: Dictionary of processed images with masks {filename: HS_image}
+                - If return_df=True: Concatenated DataFrame with spectral data from all images
         """
         # Load config from file if config_path is provided
         loaded_config = None
@@ -1284,79 +1288,204 @@ class HS_preprocessor:
         if not image_paths:
             if verbose:
                 print(f"No images found matching pattern '{pattern}' in {folder_path}")
-            return {}
+            if return_df:
+                return pd.DataFrame()
+            else:
+                return {}
         
         if verbose:
             print(f"Found {len(image_paths)} images to process")
         
-        results = {}
-        
-        for img_path in image_paths:
-            try:
-                filename = os.path.basename(img_path)
-                if verbose:
-                    print(f"\nProcessing: {filename}")
-                
-                # Create processor and run pipeline (inherit verbose setting)
-                processor = HS_preprocessor(img_path, verbose=verbose)
-                
-                # Set the processor's config from the loaded/provided configuration
-                if final_config is not None:
-                    processor.config = final_config.copy()
-                
-                # Set reference teflon if provided
-                if final_reference_teflon is not None:
-                    if isinstance(final_reference_teflon, dict):
-                        # Check if it's the new wavelength-as-keys format
-                        if all(isinstance(k, (int, float)) for k in final_reference_teflon.keys()):
-                            # Already in new format
-                            processor.reference_teflon = final_reference_teflon.copy()
-                        elif 'spectrum' in final_reference_teflon:
-                            # Legacy dictionary format
-                            processor.reference_teflon = final_reference_teflon.copy()
+        if return_df:
+            # Memory-efficient processing for DataFrame output
+            extracted_spectra = []
+            successful_count = 0
+            
+            for img_path in image_paths:
+                try:
+                    filename = os.path.basename(img_path)
+                    if verbose:
+                        print(f"\nProcessing: {filename}")
+                    
+                    # Create processor and run pipeline (inherit verbose setting)
+                    processor = HS_preprocessor(img_path, verbose=verbose)
+                    
+                    # Set the processor's config from the loaded/provided configuration
+                    if final_config is not None:
+                        processor.config = final_config.copy()
+                    
+                    # Set reference teflon if provided
+                    if final_reference_teflon is not None:
+                        if isinstance(final_reference_teflon, dict):
+                            # Check if it's the new wavelength-as-keys format
+                            if all(isinstance(k, (int, float)) for k in final_reference_teflon.keys()):
+                                # Already in new format
+                                processor.reference_teflon = final_reference_teflon.copy()
+                            elif 'spectrum' in final_reference_teflon:
+                                # Legacy dictionary format
+                                processor.reference_teflon = final_reference_teflon.copy()
+                            else:
+                                # Unknown dict format
+                                processor.reference_teflon = final_reference_teflon
+                                if verbose:
+                                    print(f"Warning: Unknown reference teflon dictionary format for {filename}")
                         else:
-                            # Unknown dict format
+                            # Legacy array format
                             processor.reference_teflon = final_reference_teflon
                             if verbose:
-                                print(f"Warning: Unknown reference teflon dictionary format for {filename}")
+                                print(f"Warning: Using legacy reference teflon array format for {filename}")
+                    
+                    # Set up config override for external parameters
+                    config_override = {}
+                    
+                    # Add white reference path to sensor calibration config if provided
+                    if white_ref_path:
+                        config_override['sensor_calibration'] = {'white_ref_path': white_ref_path}
+                    
+                    processor.run_full_pipeline(config_override=config_override if config_override else None,
+                                              extract_masks_flag=extract_masks)
+                    
+                    # Get processed image
+                    hs_image = processor.get_current_image()
+                    
+                    if verbose:
+                        print(f"Completed: {filename}")
+                        if extract_masks and hasattr(hs_image, 'mask') and hs_image.mask is not None:
+                            mask_pixels = np.sum(hs_image.mask)
+                            total_pixels = hs_image.mask.shape[0] * hs_image.mask.shape[1]
+                            print(f"Mask: {mask_pixels}/{total_pixels} pixels ({100*mask_pixels/total_pixels:.1f}%)")
+                    
+                    # Extract spectral data immediately to avoid memory accumulation
+                    if hs_image is not None and hasattr(hs_image, 'mask') and hs_image.mask is not None:
+                        # Apply mask to the image
+                        masked_image = hs_image.img * hs_image.mask
+                        
+                        # Reshape to 2D: (pixels, bands)
+                        masked_img_flat = masked_image.reshape(-1, masked_image.shape[2])
+                        
+                        # Filter out zero pixels (non-masked pixels)
+                        masked_img_filtered = masked_img_flat[~np.all(masked_img_flat == 0, axis=1)]
+                        
+                        if len(masked_img_filtered) > 0:
+                            # Create DataFrame with wavelengths as column names
+                            masked_img_df = pd.DataFrame(masked_img_filtered, columns=hs_image.ind)
+                            
+                            # Extract label from filename (format: "X-X-LABEL-X-...")
+                            try:
+                                label = hs_image.name.split("-")[2] if hasattr(hs_image, 'name') else filename.split("-")[2]
+                            except IndexError:
+                                label = "unknown"
+                            
+                            masked_img_df['label'] = label
+                            extracted_spectra.append(masked_img_df)
+                            
+                            if verbose:
+                                print(f"Extracted {len(masked_img_filtered)} masked pixels from {filename}")
+                        else:
+                            if verbose:
+                                print(f"No masked pixels found in {filename}")
                     else:
-                        # Legacy array format
-                        processor.reference_teflon = final_reference_teflon
                         if verbose:
-                            print(f"Warning: Using legacy reference teflon array format for {filename}")
-                
-                # Set up config override for external parameters
-                config_override = {}
-                
-                # Add white reference path to sensor calibration config if provided
-                if white_ref_path:
-                    config_override['sensor_calibration'] = {'white_ref_path': white_ref_path}
-                
-                processor.run_full_pipeline(config_override=config_override if config_override else None,
-                                          extract_masks_flag=extract_masks)
-                
-                # Store result
-                results[filename] = processor.get_current_image()
-                
+                            print(f"Skipping spectral extraction for {filename}: no image or mask data")
+                    
+                    successful_count += 1
+                    
+                    # Clear memory by deleting the processor and image
+                    del processor
+                    del hs_image
+                    
+                except Exception as e:
+                    if verbose:
+                        print(f"Failed {filename}: {str(e)}")
+            
+            if verbose:
+                print(f"\nProcessed {successful_count}/{len(image_paths)} images successfully")
+            
+            if not extracted_spectra:
                 if verbose:
-                    print(f"Completed: {filename}")
-                    if extract_masks and hasattr(processor.image, 'mask'):
-                        mask_pixels = np.sum(processor.image.mask)
-                        total_pixels = processor.image.mask.shape[0] * processor.image.mask.shape[1]
-                        print(f"Mask: {mask_pixels}/{total_pixels} pixels ({100*mask_pixels/total_pixels:.1f}%)")
-                
-            except Exception as e:
-                if verbose:
-                    print(f"Failed {filename}: {str(e)}")
-                results[filename] = None
+                    print("No spectral data extracted!")
+                return pd.DataFrame()
+            
+            # Concatenate all DataFrames
+            concatenated_df = pd.concat(extracted_spectra, axis=0, ignore_index=True)
+            
+            if verbose:
+                print(f"Total extracted spectra: {len(concatenated_df)} pixels from {len(extracted_spectra)} images")
+                print(f"DataFrame shape: {concatenated_df.shape}")
+                print(f"Labels found: {concatenated_df['label'].unique()}")
+            
+            return concatenated_df
         
-        if verbose:
-            successful_results = [r for r in results.values() if r is not None]
-            print(f"\nProcessed {len(successful_results)}/{len(image_paths)} images successfully")
-            if extract_masks:
-                mask_count = sum(1 for r in successful_results if hasattr(r, 'mask') and r.mask is not None)
-                print(f"Masks extracted for {mask_count}/{len(successful_results)} processed images")
-        return results
+        else:
+            # Original behavior: return dictionary of processed images
+            results = {}
+            
+            for img_path in image_paths:
+                try:
+                    filename = os.path.basename(img_path)
+                    if verbose:
+                        print(f"\nProcessing: {filename}")
+                    
+                    # Create processor and run pipeline (inherit verbose setting)
+                    processor = HS_preprocessor(img_path, verbose=verbose)
+                    
+                    # Set the processor's config from the loaded/provided configuration
+                    if final_config is not None:
+                        processor.config = final_config.copy()
+                    
+                    # Set reference teflon if provided
+                    if final_reference_teflon is not None:
+                        if isinstance(final_reference_teflon, dict):
+                            # Check if it's the new wavelength-as-keys format
+                            if all(isinstance(k, (int, float)) for k in final_reference_teflon.keys()):
+                                # Already in new format
+                                processor.reference_teflon = final_reference_teflon.copy()
+                            elif 'spectrum' in final_reference_teflon:
+                                # Legacy dictionary format
+                                processor.reference_teflon = final_reference_teflon.copy()
+                            else:
+                                # Unknown dict format
+                                processor.reference_teflon = final_reference_teflon
+                                if verbose:
+                                    print(f"Warning: Unknown reference teflon dictionary format for {filename}")
+                        else:
+                            # Legacy array format
+                            processor.reference_teflon = final_reference_teflon
+                            if verbose:
+                                print(f"Warning: Using legacy reference teflon array format for {filename}")
+                    
+                    # Set up config override for external parameters
+                    config_override = {}
+                    
+                    # Add white reference path to sensor calibration config if provided
+                    if white_ref_path:
+                        config_override['sensor_calibration'] = {'white_ref_path': white_ref_path}
+                    
+                    processor.run_full_pipeline(config_override=config_override if config_override else None,
+                                              extract_masks_flag=extract_masks)
+                    
+                    # Store result
+                    results[filename] = processor.get_current_image()
+                    
+                    if verbose:
+                        print(f"Completed: {filename}")
+                        if extract_masks and hasattr(processor.image, 'mask'):
+                            mask_pixels = np.sum(processor.image.mask)
+                            total_pixels = processor.image.mask.shape[0] * processor.image.mask.shape[1]
+                            print(f"Mask: {mask_pixels}/{total_pixels} pixels ({100*mask_pixels/total_pixels:.1f}%)")
+                    
+                except Exception as e:
+                    if verbose:
+                        print(f"Failed {filename}: {str(e)}")
+                    results[filename] = None
+            
+            if verbose:
+                successful_results = [r for r in results.values() if r is not None]
+                print(f"\nProcessed {len(successful_results)}/{len(image_paths)} images successfully")
+                if extract_masks:
+                    mask_count = sum(1 for r in successful_results if hasattr(r, 'mask') and r.mask is not None)
+                    print(f"Masks extracted for {mask_count}/{len(successful_results)} processed images")
+            return results
     
     
     
