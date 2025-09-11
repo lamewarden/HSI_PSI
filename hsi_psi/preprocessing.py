@@ -1058,7 +1058,8 @@ class HS_preprocessor:
             clip_to: Maximum reflectance value for sensor calibration
             
         Returns:
-            numpy.ndarray: Reference teflon spectrum mapped to current wavelength range
+            dict: Dictionary compatible with plot_spectra function containing:
+                  {"Reference side teflon": {"spectrum": array, "wavelengths": array, "roi": None}}
         """
         # Check if we have a current image to map to
         if not hasattr(self, 'image') or self.image is None:
@@ -1180,7 +1181,14 @@ class HS_preprocessor:
             if self.reference_teflon_meta.get('mapped', False):
                 print(f"    ✓ Mapped from source range: {self.reference_teflon_meta['source_range']}")
         
-        return reference_teflon_mapped
+        # Return dictionary compatible with plot_spectra function
+        return {
+            "Reference side teflon": {
+                "spectrum": reference_teflon_mapped,
+                "wavelengths": target_wavelengths,
+                "roi": None  # No specific ROI for reference teflon
+            }
+        }
 
     @staticmethod
     def create_config_template():
