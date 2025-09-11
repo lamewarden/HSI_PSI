@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from typing import Dict, Optional, Union, List, Tuple, Any
 from .core import HS_image, MS_image
+from sklearn.metrics import classification_report, confusion_matrix
 
 
 def get_hdr_images(folder: str, min_rows: int = 1, format: str = 'hdr') -> Dict[str, HS_image]:
