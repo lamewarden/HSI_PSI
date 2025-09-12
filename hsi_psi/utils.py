@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from typing import Dict, Optional, Union, List, Tuple, Any
 from .core import HS_image, MS_image
+from sklearn.metrics import classification_report, confusion_matrix
 
 
 def get_hdr_images(folder: str, min_rows: int = 1, format: str = 'hdr') -> Dict[str, HS_image]:
@@ -573,7 +574,7 @@ def print_package_info() -> None:
     print("=" * 60)
     print("HSI_PSI - Hyperspectral Image Processing Package")
     print("=" * 60)
-    print(f"Version: 2.0.0")
+    print(f"Version: 0.2.0")
     print(f"Python: {sys.version.split()[0]}")
     print(f"Platform: {platform.system()} {platform.release()}")
     print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -611,3 +612,168 @@ def print_package_info() -> None:
     print("  • Spectral signature characterization")
     print("  • Agricultural phenotyping")
     print("=" * 60)
+
+
+def plot_spectra(spectra_dicts_list, dict_names=None, scale=False, 
+                 title="Multiple Spectra Comparison", figure_size=(12, 8)):
+    """
+    Plot multiple spectra from a list of dictionaries (format from spectrum_probe).
+    
+    Args:
+        spectra_dicts_list: List of dictionaries, each containing spectra data 
+                          (format from spectrum_probe output)
+        dict_names: List of names for each dictionary. If None, uses "Dataset 1", "Dataset 2", etc.
+        scale: If True, scale all spectra to have the same maximum value as the first spectrum
+        title: Title for the plot
+        figure_size: Tuple of (width, height) for the figure size
+        
+    Example:
+        # Get spectra from different images
+        spectra1 = preprocessor1.spectrum_probe(rois=rois, show=False)
+        spectra2 = preprocessor2.spectrum_probe(rois=rois, show=False) 
+        
+        # Plot them together
+        from hsi_psi.utils import plot_spectra
+        plot_spectra([spectra1, spectra2], 
+                    dict_names=["Image 1", "Image 2"],
+                    scale=True)
+    """
+    if not spectra_dicts_list:
+        raise ValueError("spectra_dicts_list cannot be empty")
+    
+    # Generate default names if not provided
+    if dict_names is None:
+        dict_names = [f"Dataset {i+1}" for i in range(len(spectra_dicts_list))]
+    elif len(dict_names) != len(spectra_dicts_list):
+        raise ValueError("Length of dict_names must match length of spectra_dicts_list")
+    
+    # Create figure
+    plt.figure(figsize=figure_size)
+    
+    # Get a colormap with enough colors
+    colors = plt.cm.tab10(np.linspace(0, 1, 10))  # 10 distinct colors
+    color_idx = 0
+    
+    # Find reference spectrum for scaling if needed
+    reference_spectrum = None
+    reference_max = None
+    if scale:
+        # Use first spectrum from first dataset as reference
+        first_dict = spectra_dicts_list[0]
+        if first_dict:
+            first_key = next(iter(first_dict.keys()))
+            reference_spectrum = first_dict[first_key]["spectrum"]
+            reference_max = np.max(reference_spectrum)
+    
+    # Plot each dataset
+    for dict_idx, (spectra_dict, dataset_name) in enumerate(zip(spectra_dicts_list, dict_names)):
+        if not spectra_dict:
+            continue
+            
+        # Plot each spectrum in the dictionary
+        for roi_name, data in spectra_dict.items():
+            spectrum = data["spectrum"]
+            wavelengths = data["wavelengths"]
+            
+            # Apply scaling if requested
+            if scale and reference_max is not None:
+                current_max = np.max(spectrum)
+                if current_max > 0:  # Avoid division by zero
+                    scale_factor = reference_max / current_max
+                    spectrum = spectrum * scale_factor
+            
+            # Create label combining dataset name and ROI name
+            label = f"{dataset_name} - {roi_name}"
+            
+            # Plot with unique color
+            color = colors[color_idx % len(colors)]
+            plt.plot(wavelengths, spectrum, color=color, label=label, linewidth=2)
+            color_idx += 1
+    
+    # Customize plot
+    plt.xlabel('Wavelength (nm)')
+    plt.ylabel('Reflectance' + (' (scaled)' if scale else ''))
+    plt.title(title)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+def vis_clust_2D(X, pc_to_visualize):
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    # Map unique labels to integer values to color them
+    unique_labels = X['label'].unique()
+    label_mapping = {label: i for i, label in enumerate(unique_labels)}
+    colors = X['label'].map(label_mapping)
+
+    # Create a scatter plot, color by 'label' column values
+    scatter = ax.scatter(x=X.iloc[:, pc_to_visualize[0]], y=X.iloc[:, pc_to_visualize[1]], c=colors, cmap='rainbow')
+
+    # Create a legend with the actual 'label' values
+    handles, _ = scatter.legend_elements()
+    labels = [str(label) for label in unique_labels]
+    ax.legend(handles=handles, labels=labels, title="Label")
+    plt.xlabel(f'PC{pc_to_visualize[0]}')
+    plt.ylabel(f'PC{pc_to_visualize[1]}')
+
+    # Show the plot
+    plt.show()
+
+def plot_confusion_matrix(y_true, y_pred, class_names=None, fig_size=(8,6)):
+    """
+    Plot a confusion matrix with absolute counts and row-wise percentages.
+    The percentage values are displayed in a smaller font.
+    
+    Args:
+        y_true (array-like): Ground truth labels.
+        y_pred (array-like): Predicted labels.
+        class_names (list, optional): List of class names (strings).
+            If None, indices [0..n_classes-1] will be used.
+        fig_size (tuple, optional): Figure size in inches. Default is (8, 6).
+    """
+    cm = confusion_matrix(y_true, y_pred)
+    n_classes = cm.shape[0]
+
+    # If no class names are provided, just use numeric class indices
+    if class_names is None:
+        class_names = [str(i) for i in range(n_classes)]
+    
+    # Compute row-wise percentages
+    cm_percent = np.zeros_like(cm, dtype=float)
+    for i in range(n_classes):
+        row_sum = cm[i].sum()
+        if row_sum != 0:
+            cm_percent[i] = cm[i] / row_sum * 100
+        else:
+            cm_percent[i] = 0
+
+    fig, ax = plt.subplots(figsize=fig_size)
+    cax = ax.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
+    plt.title('Confusion Matrix')
+    plt.colorbar(cax)
+
+    # Set tick marks and labels
+    ax.set_xticks(np.arange(n_classes))
+    ax.set_yticks(np.arange(n_classes))
+    ax.set_xticklabels(class_names, rotation=45, ha='right')
+    ax.set_yticklabels(class_names)
+
+    # Determine threshold for text color
+    threshold = cm.max() / 2.
+
+    # Loop over data dimensions and create text annotations.
+    for i in range(n_classes):
+        for j in range(n_classes):
+            abs_val = cm[i, j]
+            perc_val = cm_percent[i, j]
+            color = 'white' if abs_val > threshold else 'black'
+            # Place absolute count above center
+            ax.text(j, i - 0.2, f"{abs_val}", ha='center', va='center', color=color, fontsize=12)
+            # Place percentage value below center in a smaller font
+            ax.text(j, i + 0.2, f"{perc_val:.1f}%", ha='center', va='center', color=color, fontsize=8)
+
+    ax.set_ylabel('True label')
+    ax.set_xlabel('Predicted label')
+    plt.tight_layout()
+    plt.show()

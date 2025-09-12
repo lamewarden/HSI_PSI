@@ -28,13 +28,15 @@ class HS_image:
         except:
             convert_header_to_envi(data_path)
             hdr = sp.envi.open(data_path)
-        self.hdr = hdr.bands.centers
+        
+        # Store wavelength information - self.ind is the primary source
         self.rows, self.cols, self.bands = hdr.nrows, hdr.ncols, hdr.nbands
         self.meta = hdr.metadata
         self.img = hdr.load()
         self.name = os.path.basename(data_path)
         self.ind = [int(float(x)) for x in self.meta['wavelength'][:-1]]
         self.bits = int(self.meta['data type'])
+        
         self.normalized = False
         self.calibrated = False
         # self.bits = hdr.bits
@@ -310,7 +312,7 @@ class HS_image:
             
         Notes:
         ------
-        - Updates self.img, self.ind, self.bands, and self.hdr to match the cropped range
+        - Updates self.img, self.ind, and self.bands to match the cropped range
         - All wavelengths outside the specified range are removed
         - Band indices are adjusted to maintain consistency
         
@@ -365,14 +367,6 @@ class HS_image:
         # Update band count
         self.bands = len(self.ind)
         
-        # Update hdr if it exists
-        if hasattr(self, 'hdr') and self.hdr is not None:
-            try:
-                self.hdr = self.hdr[start_idx:end_idx]
-            except (IndexError, TypeError):
-                # If hdr format is incompatible, reconstruct it
-                self.hdr = self.ind.copy()
-                
         # Update metadata if it exists
         if hasattr(self, 'meta') and self.meta is not None and 'wavelength' in self.meta:
             try:
@@ -386,8 +380,8 @@ class HS_image:
         
         # Log the cropping operation
         new_wl_range = f"{self.ind[0]}-{self.ind[-1]} nm"
-        print(f"✓ Spectral range cropped: {original_wl_range} → {new_wl_range}")
-        print(f"  Bands: {original_bands} → {self.bands} (indices {start_idx}:{end_idx-1})")
+
+    
         
         return self
 

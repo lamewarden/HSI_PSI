@@ -1,5 +1,5 @@
 """
-Enhanced usage example for HSI_PSI package v2.0
+Enhanced usage example for HSI_PSI package v0.2.0
 
 This example demonstrates the new features including:
 1. Spectral range cropping capabilities
@@ -125,6 +125,6 @@ if __name__ == "__main__":
     demonstrate_wavelength_mapping()
     
     print("\n" + "=" * 50)
-    print("HSI_PSI v2.0 - Ready for advanced hyperspectral analysis!")
+    print("HSI_PSI v0.2.0 - Ready for advanced hyperspectral analysis!")
     print("Optimized for close-range vegetation monitoring")
     print("=" * 50)

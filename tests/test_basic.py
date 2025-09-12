@@ -1,5 +1,5 @@
 """
-Enhanced tests for HSI_PSI package v2.0
+Enhanced tests for HSI_PSI package v0.2.0
 Tests new features including spectral cropping, wavelength mapping, and noise analysis
 """
 import unittest
@@ -161,5 +161,5 @@ class TestMockHSImage(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    print("Running enhanced HSI_PSI v2.0 tests...")
+    print("Running enhanced HSI_PSI v0.2.0 tests...")
     unittest.main()

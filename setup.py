@@ -32,7 +32,7 @@ def get_version():
         for line in f:
             if line.startswith("__version__"):
                 return line.split("=")[1].strip().strip('"').strip("'")
-    return "2.0.0"
+    return "0.2.0"
 
 def print_package_info():
     """Print HSI_PSI package information"""

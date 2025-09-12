@@ -72,6 +72,10 @@ class HS_preprocessor:
         self.config = {}
         self.step_results = {}  # Store intermediate results for visualization
         
+        # NEW: Track execution order and parameters for dynamic config generation
+        self.execution_order = []  # List of steps in order they were executed
+        self.execution_params = {}  # Parameters used for each executed step
+        
         if image_path:
             self.load_image(image_path)
     
@@ -81,10 +85,31 @@ class HS_preprocessor:
         self.image = HS_image(image_path)
         self.original_image = copy.deepcopy(self.image)
         if self.verbose:
-            print(f"✓ Loaded image: {os.path.basename(image_path)}")
+            print(f" Loaded image: {os.path.basename(image_path)}")
             print(f"  Shape: {self.image.img.shape}")
             print(f"  Wavelength range: {min(self.image.ind)}-{max(self.image.ind)} nm")
         return self
+    
+    def _track_execution(self, step_name, params):
+        """
+        Track execution of processing steps for dynamic config generation.
+        
+        Args:
+            step_name (str): Name of the processing step
+            params (dict): Parameters used for the step
+        """
+        # Remove step if it already exists (update case)
+        if step_name in self.execution_order:
+            self.execution_order.remove(step_name)
+        
+        # Add step to end of execution order
+        self.execution_order.append(step_name)
+        
+        # Store parameters used
+        self.execution_params[step_name] = params.copy()
+        
+        if self.verbose:
+            print(f"   Tracked execution: {step_name}")
     
     def _upload_calibration(self, dark_calibration=None, white_ref_path=None):
         """Upload white and dark calibration matrices, mapped to current image wavelengths."""
@@ -230,11 +255,11 @@ class HS_preprocessor:
             overlap_bands = np.sum((target_wavelengths >= overlap_start) & (target_wavelengths <= overlap_end))
             total_target_bands = len(target_wavelengths)
             
-            print(f"    ✓ Mapped {len(source_wavelengths)} → {len(target_wavelengths)} bands")
+            print(f"     Mapped {len(source_wavelengths)} → {len(target_wavelengths)} bands")
             print(f"    Overlap: {overlap_start:.0f}-{overlap_end:.0f} nm ({overlap_bands}/{total_target_bands} bands)")
             
             if overlap_bands < total_target_bands * 0.8:  # Less than 80% overlap
-                print(f"    ⚠ Warning: Limited spectral overlap ({overlap_bands/total_target_bands*100:.1f}%)")
+                print(f"     Warning: Limited spectral overlap ({overlap_bands/total_target_bands*100:.1f}%)")
                 
         return mapped_data
     
@@ -242,7 +267,7 @@ class HS_preprocessor:
   
     
     def extract_masks(self, pri_thr=None, ndvi_thr=None, hbsi_thr=None, min_pix_size=None, 
-                     repeat=10, show_visualization=True):
+                     repeat=10, show=True):
         """Step 7: Extract vegetation masks using vegetation indices."""
         
         # Use parameters from loaded config if available, otherwise use provided parameters or hardcoded defaults
@@ -265,16 +290,61 @@ class HS_preprocessor:
         
         # Calculate vegetation indices
         ndvi_image = (self.image[751] - self.image[670]) / (self.image[751] + self.image[670] + 1e-7)
-        ndvi_mask = (ndvi_image > ndvi_thr)[:,:,np.newaxis]
-        
         hbsi_image = (self.image[470] - self.image[751]) / (self.image[470] + self.image[751] + 1e-7)
-        hbsi_mask = (hbsi_image > hbsi_thr)[:,:,np.newaxis]
-
         pri_image = (self.image[531] - self.image[570]) / (self.image[531] + self.image[570] + 1e-7)
+        
+        # Automatic outlier removal (inf, nan, and 5-sigma outliers)
+        def clean_vi_outliers(vi_image, name, sigma=5):
+            """Clean vegetation index from inf, nan, and statistical outliers."""
+            original_shape = vi_image.shape
+            
+            # Remove inf and nan
+            vi_cleaned = vi_image.copy()
+            vi_cleaned[np.isinf(vi_cleaned)] = np.nan
+            
+            # Get valid (finite) values for statistics
+            valid_mask = np.isfinite(vi_cleaned)
+            if np.sum(valid_mask) == 0:
+                if self.verbose:
+                    print(f"  Warning: All {name} values are invalid")
+                return vi_image  # Return original if all invalid
+            
+            valid_values = vi_cleaned[valid_mask]
+            mean_val = np.mean(valid_values)
+            std_val = np.std(valid_values)
+            
+            # Define outlier bounds (5-sigma)
+            lower_bound = mean_val - sigma * std_val
+            upper_bound = mean_val + sigma * std_val
+            
+            # Count outliers before removal
+            outliers_mask = (vi_cleaned < lower_bound) | (vi_cleaned > upper_bound) | ~valid_mask
+            n_outliers = np.sum(outliers_mask)
+            total_pixels = vi_cleaned.size
+            
+            # Replace outliers with median of valid values
+            median_val = np.median(valid_values)
+            vi_cleaned[outliers_mask] = median_val
+            
+            if self.verbose and n_outliers > 0:
+                print(f"   {name}: Cleaned {n_outliers}/{total_pixels} outliers ({100*n_outliers/total_pixels:.1f}%)")
+                print(f"    Range before: [{np.nanmin(vi_image):.3f}, {np.nanmax(vi_image):.3f}]")
+                print(f"    Range after: [{np.nanmin(vi_cleaned):.3f}, {np.nanmax(vi_cleaned):.3f}]")
+            
+            return vi_cleaned
+        
+        # Clean all vegetation indices
+        ndvi_image = clean_vi_outliers(ndvi_image, "NDVI")
+        hbsi_image = clean_vi_outliers(hbsi_image, "HBSI") 
+        pri_image = clean_vi_outliers(pri_image, "PRI")
+        
+        # Create masks after cleaning
+        ndvi_mask = (ndvi_image > ndvi_thr)[:,:,np.newaxis]
+        hbsi_mask = (hbsi_image > hbsi_thr)[:,:,np.newaxis]
         pri_mask = (pri_image < pri_thr)[:,:,np.newaxis]
 
         # Display all vegetation indices for calibration
-        if show_visualization:
+        if show:
             orig_rgb = self.get_rgb_sample(normalize=True, correct=False, show=False)
             
             fig, axes = plt.subplots(2, 3, figsize=(18, 6))
@@ -328,7 +398,7 @@ class HS_preprocessor:
         # Store result for visualization
         self.step_results['mask_extraction'] = copy.deepcopy(self.image)
         
-        if show_visualization:
+        if show:
             # Create visualization with proper transparency
             plt.figure(figsize=(8, 4))
             plt.imshow(np.repeat(orig_rgb[:,:,:], repeat, axis=0))
@@ -349,7 +419,7 @@ class HS_preprocessor:
             plt.show()
         
         if self.verbose:
-            print(f"✓ Mask extraction completed")
+            print(f" Mask extraction completed")
             print(f"  PRI threshold: {pri_thr}")
             print(f"  NDVI threshold: {ndvi_thr}")
             print(f"  HBSI threshold: {hbsi_thr}")
@@ -399,6 +469,9 @@ class HS_preprocessor:
         """
         Run the complete preprocessing pipeline using loaded configuration.
         
+        NEW: Pipeline order is determined by the ORDER of keys in the config file!
+        Steps missing from config are skipped entirely.
+        
         Args:
             config_override (dict, optional): Override specific parameters for any step.
                                             Format: {'step_name': {'param': value}}
@@ -407,15 +480,21 @@ class HS_preprocessor:
         Returns:
             self: For method chaining
             
-        Example:
-            # Use default config with mask extraction
+        Examples:
+            # Config order determines execution order
+            config = {
+                'normalization': {...},      # This runs FIRST
+                'sensor_calibration': {...}, # This runs SECOND  
+                'solar_correction': {...}    # This runs THIRD
+            }
+            processor.config = config
             processor.run_full_pipeline()
             
-            # Override specific parameters
-            processor.run_full_pipeline({
-                'sensor_calibration': {'clip_to': 15},
-                'mask_extraction': {'pri_thr': -0.15}
-            })
+            # Missing steps are skipped
+            config = {
+                'sensor_calibration': {...},  # Only these two steps
+                'normalization': {...}        # will be executed
+            }
         """
         
         # Check if config is loaded
@@ -438,113 +517,54 @@ class HS_preprocessor:
                 else:
                     pipeline_config[step] = step_params
         
+        # NEW: Get pipeline steps from config order (not hardcoded)
+        pipeline_steps = list(pipeline_config.keys())
+        
+        # Remove mask_extraction from main pipeline (handled separately)
+        if 'mask_extraction' in pipeline_steps:
+            pipeline_steps.remove('mask_extraction')
+        
         if self.verbose:
-            print("🔄 Running full preprocessing pipeline...")
-            steps_to_run = ['sensor_calibration', 'spike_removal', 'spectral_cropping', 'solar_correction', 'spectral_smoothing', 'normalization']
+            print(" Running config-driven preprocessing pipeline...")
+            print(f" Steps from config (in order): {pipeline_steps}")
             if extract_masks_flag:
-                steps_to_run.append('mask_extraction')
-            print(f"Pipeline steps: {steps_to_run}")
+                print(f" Final step: mask_extraction")
         
-        # Run preprocessing pipeline steps in order (optimized sequence)
-        pipeline_steps = ['sensor_calibration', 'spike_removal', 'spectral_cropping', 'solar_correction', 'spectral_smoothing', 'normalization']
+        # Validate that all steps in config are known processing steps
+        known_steps = {'sensor_calibration', 'spike_removal', 'spectral_cropping', 
+                      'solar_correction', 'spectral_smoothing', 'normalization'}
         
-        for step in pipeline_steps:
-            if step in pipeline_config:
-                if self.verbose:
-                    print(f"Running {step}...")
+        unknown_steps = [step for step in pipeline_steps if step not in known_steps]
+        if unknown_steps:
+            raise ValueError(f"Unknown pipeline steps in config: {unknown_steps}. "
+                           f"Known steps: {list(known_steps)}")
+        
+        # Execute steps in config order
+        for step_num, step in enumerate(pipeline_steps, 1):
+            if self.verbose:
+                print(f" Step {step_num}/{len(pipeline_steps)}: {step}...")
+            
+            try:
+                step_params = pipeline_config[step].copy()
                 
-                try:
-                    step_params = pipeline_config[step].copy()
+                # Execute the step using the helper method
+                self._execute_pipeline_step(step, step_params)
+                
+                if self.verbose:
+                    print(f" Step {step_num}/{len(pipeline_steps)}: {step} completed")
                     
-                    # Handle sensor calibration (Step 1)
-                    if step == 'sensor_calibration':
-                        # Filter out metadata and handle white_ref_path separately
-                        method_params = {k: v for k, v in step_params.items() 
-                                       if k not in ['white_ref_path', 'calibration_applied', 'calibration_source']}
-                        white_ref_path = step_params.get('white_ref_path', None)
-                        self.sensor_calibration(white_ref_path=white_ref_path, **method_params)
-                    
-                    # Handle spike removal (Step 2)
-                    elif step == 'spike_removal':
-                        # Filter out metadata parameters that shouldn't be passed to the method
-                        method_params = {k: v for k, v in step_params.items() 
-                                       if k not in ['spikes_detected']}
-                        self.remove_spectral_spikes(**method_params)
-                    
-                    # Handle spectral cropping (Step 3)
-                    elif step == 'spectral_cropping':
-                        # Filter out metadata parameters that shouldn't be passed to the method
-                        method_params = {k: v for k, v in step_params.items() 
-                                       if k not in ['original_bands', 'original_range', 'cropped_bands', 'cropped_range']}
-                        self.crop_spectral_range(**method_params)
-                    
-                    # Handle solar correction (Step 4)
-                    elif step == 'solar_correction':
-                        # Filter out metadata parameters that shouldn't be passed to the method
-                        # These are computed internally and saved for reference but not method parameters
-                        method_params = {k: v for k, v in step_params.items() 
-                                       if k not in ['reference_source', 'has_reference']}
-                        
-                        # Convert teflon_edge_coord from list to tuple if needed
-                        if 'teflon_edge_coord' in method_params and isinstance(method_params['teflon_edge_coord'], list):
-                            method_params['teflon_edge_coord'] = tuple(method_params['teflon_edge_coord'])
-                        
-                        # Use loaded reference teflon if available
-                        if hasattr(self, 'reference_teflon') and self.reference_teflon is not None:
-                            if isinstance(self.reference_teflon, dict):
-                                # Check if it's the new wavelength-as-keys format
-                                if all(isinstance(k, (int, float)) for k in self.reference_teflon.keys()):
-                                    # Extract spectrum from wavelength-as-keys format
-                                    current_wavelengths = np.array(self.image.ind)
-                                    ref_wavelengths = np.array(sorted(self.reference_teflon.keys()))
-                                    ref_spectrum = np.array([self.reference_teflon[wl] for wl in ref_wavelengths])
-                                    
-                                    if np.array_equal(ref_wavelengths, current_wavelengths):
-                                        method_params['reference_teflon'] = ref_spectrum
-                                    else:
-                                        # Interpolate to match current wavelengths
-                                        from scipy.interpolate import interp1d
-                                        interp_func = interp1d(ref_wavelengths, ref_spectrum, 
-                                                             kind='linear', bounds_error=False, fill_value='extrapolate')
-                                        method_params['reference_teflon'] = interp_func(current_wavelengths)
-                                elif 'spectrum' in self.reference_teflon:
-                                    # Legacy dictionary format
-                                    method_params['reference_teflon'] = self.reference_teflon['spectrum']
-                                else:
-                                    # Unknown dict format
-                                    if self.verbose:
-                                        print("  ⚠ Warning: Unknown reference teflon dictionary format")
-                            else:
-                                # Legacy array format
-                                method_params['reference_teflon'] = self.reference_teflon
-                        self.solar_correction(**method_params)
-                    
-                    # Handle spectral smoothing (Step 5)
-                    elif step == 'spectral_smoothing':
-                        # Filter out metadata parameters that shouldn't be passed to the method
-                        method_params = {k: v for k, v in step_params.items() 
-                                       if k not in ['smoothing_applied', 'smoothing_method']}
-                        self.spectral_smoothing(**method_params)
-                    
-                    # Handle normalization (Step 6)
-                    elif step == 'normalization':
-                        # Filter out metadata parameters that shouldn't be passed to the method
-                        method_params = {k: v for k, v in step_params.items() 
-                                       if k not in ['normalization_applied', 'normalization_method']}
-                        self.normalization(**method_params)
-                        
-                except Exception as e:
-                    error_msg = f"Error in pipeline step '{step}': {str(e)}"
-                    if self.verbose:
-                        print(f"❌ {error_msg}")
-                        import traceback
-                        traceback.print_exc()
-                    raise RuntimeError(error_msg) from e
+            except Exception as e:
+                error_msg = f"Error in pipeline step '{step}' (step {step_num}/{len(pipeline_steps)}): {str(e)}"
+                if self.verbose:
+                    print(f" {error_msg}")
+                    import traceback
+                    traceback.print_exc()
+                raise RuntimeError(error_msg) from e
         
         # Run mask extraction as final step if requested
         if extract_masks_flag:
             if self.verbose:
-                print(f"Running mask_extraction...")
+                print(f" Final step: mask_extraction...")
             
             try:
                 # Use mask extraction parameters from config, or defaults
@@ -556,24 +576,117 @@ class HS_preprocessor:
                 })
                 
                 # Don't show visualization in batch processing unless verbose
-                mask_params['show_visualization'] = self.verbose
+                mask_params['show'] = self.verbose
                 
                 self.extract_masks(**mask_params)
+                
+                if self.verbose:
+                    print(f" Final step: mask_extraction completed")
                 
             except Exception as e:
                 error_msg = f"Error in mask extraction: {str(e)}"
                 if self.verbose:
-                    print(f"❌ {error_msg}")
+                    print(f" {error_msg}")
                     import traceback
                     traceback.print_exc()
                 raise RuntimeError(error_msg) from e
         
         if self.verbose:
-            print("Full pipeline completed successfully!")
+            total_steps = len(pipeline_steps) + (1 if extract_masks_flag else 0)
+            print(f" Pipeline completed successfully! ({total_steps} steps executed)")
             if extract_masks_flag and hasattr(self.image, 'mask'):
-                print(f"Mask stored in image.mask attribute")
+                print(f" Mask stored in image.mask attribute")
             
         return self
+    
+    def _execute_pipeline_step(self, step, step_params):
+        """
+        Execute a single pipeline step with proper parameter filtering.
+        
+        Args:
+            step (str): Name of the pipeline step
+            step_params (dict): Parameters for the step
+        """
+        
+        # Handle sensor calibration (Step 1)
+        if step == 'sensor_calibration':
+            # Filter out metadata and handle white_ref_path separately
+            method_params = {k: v for k, v in step_params.items() 
+                           if k not in ['white_ref_path', 'calibration_applied', 'calibration_source']}
+            white_ref_path = step_params.get('white_ref_path', None)
+            self.sensor_calibration(white_ref_path=white_ref_path, **method_params)
+        
+        # Handle spike removal (Step 2)
+        elif step == 'spike_removal':
+            # Filter out metadata parameters that shouldn't be passed to the method
+            method_params = {k: v for k, v in step_params.items() 
+                           if k not in ['spikes_detected']}
+            self.remove_spectral_spikes(**method_params)
+        
+        # Handle spectral cropping (Step 3)
+        elif step == 'spectral_cropping':
+            # Filter out metadata parameters that shouldn't be passed to the method
+            method_params = {k: v for k, v in step_params.items() 
+                           if k not in ['original_bands', 'original_range', 'cropped_bands', 'cropped_range']}
+            self.crop_spectral_range(**method_params)
+        
+        # Handle solar correction (Step 4)
+        elif step == 'solar_correction':
+            # Filter out metadata parameters that shouldn't be passed to the method
+            # These are computed internally and saved for reference but not method parameters
+            method_params = {k: v for k, v in step_params.items() 
+                           if k not in ['reference_source', 'has_reference']}
+            
+            # Convert teflon_edge_coord from list to tuple if needed
+            if 'teflon_edge_coord' in method_params and isinstance(method_params['teflon_edge_coord'], list):
+                method_params['teflon_edge_coord'] = tuple(method_params['teflon_edge_coord'])
+            
+            # Use loaded reference teflon if available
+            if hasattr(self, 'reference_teflon') and self.reference_teflon is not None:
+                if isinstance(self.reference_teflon, dict):
+                    # Check if it's the new wavelength-as-keys format
+                    if all(isinstance(k, (int, float)) for k in self.reference_teflon.keys()):
+                        # Extract spectrum from wavelength-as-keys format
+                        current_wavelengths = np.array(self.image.ind)
+                        ref_wavelengths = np.array(sorted(self.reference_teflon.keys()))
+                        ref_spectrum = np.array([self.reference_teflon[wl] for wl in ref_wavelengths])
+                        
+                        if np.array_equal(ref_wavelengths, current_wavelengths):
+                            method_params['reference_teflon'] = ref_spectrum
+                        else:
+                            # Interpolate to match current wavelengths
+                            from scipy.interpolate import interp1d
+                            interp_func = interp1d(ref_wavelengths, ref_spectrum, 
+                                                 kind='linear', bounds_error=False, fill_value='extrapolate')
+                            method_params['reference_teflon'] = interp_func(current_wavelengths)
+                    elif 'spectrum' in self.reference_teflon:
+                        # Legacy dictionary format
+                        method_params['reference_teflon'] = self.reference_teflon['spectrum']
+                    else:
+                        # Unknown dict format
+                        if self.verbose:
+                            print("   Warning: Unknown reference teflon dictionary format")
+                else:
+                    # Legacy array format
+                    method_params['reference_teflon'] = self.reference_teflon
+            self.solar_correction(**method_params)
+        
+        # Handle spectral smoothing (Step 5)
+        elif step == 'spectral_smoothing':
+            # Filter out metadata parameters that shouldn't be passed to the method
+            method_params = {k: v for k, v in step_params.items() 
+                           if k not in ['smoothing_applied', 'smoothing_method']}
+            self.spectral_smoothing(**method_params)
+        
+        # Handle normalization (Step 6)
+        elif step == 'normalization':
+            # Filter out metadata parameters that shouldn't be passed to the method
+            method_params = {k: v for k, v in step_params.items() 
+                           if k not in ['normalization_applied', 'normalization_method']}
+            self.normalization(**method_params)
+        
+        else:
+            raise ValueError(f"Unknown pipeline step: {step}")
     
     def debug_pipeline_state(self):
         """
@@ -584,50 +697,50 @@ class HS_preprocessor:
         print("=" * 60)
         
         # Image information
-        print("🖼️ IMAGE STATE:")
+        print("IMAGE STATE:")
         if hasattr(self, 'image') and self.image is not None:
-            print(f"  ✅ Image loaded: {type(self.image).__name__}")
-            print(f"  📐 Image shape: {self.image.img.shape}")
-            print(f"  📊 Data type: {self.image.img.dtype}")
-            print(f"  📈 Value range: {self.image.img.min():.4f} - {self.image.img.max():.4f}")
-            print(f"  🌈 Wavelengths: {len(self.image.ind)} bands ({self.image.ind[0]:.1f} - {self.image.ind[-1]:.1f} nm)")
+            print(f"   Image loaded: {type(self.image).__name__}")
+            print(f"   Image shape: {self.image.img.shape}")
+            print(f"   Data type: {self.image.img.dtype}")
+            print(f"   Value range: {self.image.img.min():.4f} - {self.image.img.max():.4f}")
+            print(f"   Wavelengths: {len(self.image.ind)} bands ({self.image.ind[0]:.1f} - {self.image.ind[-1]:.1f} nm)")
             if hasattr(self.image, 'mask'):
                 print(f"  🎭 Mask available: {self.image.mask.shape}")
         else:
-            print("  ❌ No image loaded")
+            print("   No image loaded")
         
         # Configuration state
-        print("\n⚙️ CONFIGURATION STATE:")
+        print("\n CONFIGURATION STATE:")
         if hasattr(self, 'config') and self.config:
-            print(f"  ✅ Config loaded with {len(self.config)} sections:")
+            print(f"   Config loaded with {len(self.config)} sections:")
             for section in self.config:
                 print(f"    - {section}")
         else:
-            print("  ❌ No configuration loaded")
+            print("   No configuration loaded")
             
         # Reference teflon state
-        print("\n🔬 REFERENCE TEFLON STATE:")
+        print("\n REFERENCE TEFLON STATE:")
         if hasattr(self, 'reference_teflon') and self.reference_teflon is not None:
             if isinstance(self.reference_teflon, dict):
-                print(f"  ✅ Reference loaded as dictionary")
+                print(f"   Reference loaded as dictionary")
                 if all(isinstance(k, (int, float)) for k in self.reference_teflon.keys()):
                     wl_keys = sorted(self.reference_teflon.keys())
-                    print(f"  📊 Wavelength range: {wl_keys[0]:.1f} - {wl_keys[-1]:.1f} nm ({len(wl_keys)} points)")
+                    print(f"   Wavelength range: {wl_keys[0]:.1f} - {wl_keys[-1]:.1f} nm ({len(wl_keys)} points)")
                 else:
-                    print(f"  📊 Legacy format with keys: {list(self.reference_teflon.keys())}")
+                    print(f"   Legacy format with keys: {list(self.reference_teflon.keys())}")
             else:
-                print(f"  ✅ Reference loaded as array: {len(self.reference_teflon)} values")
+                print(f"   Reference loaded as array: {len(self.reference_teflon)} values")
         else:
-            print("  ❌ No reference teflon loaded")
+            print("   No reference teflon loaded")
         
         # Processing history
-        print("\n📜 PROCESSING HISTORY:")
+        print("\n PROCESSING HISTORY:")
         if hasattr(self, 'step_results') and self.step_results:
-            print(f"  ✅ {len(self.step_results)} steps completed:")
+            print(f"   {len(self.step_results)} steps completed:")
             for step in self.step_results:
                 print(f"    - {step}")
         else:
-            print("  📝 No processing steps completed yet")
+            print("   No processing steps completed yet")
             
         print("=" * 60)
     
@@ -636,10 +749,10 @@ class HS_preprocessor:
         Validate that all configuration parameters match method signatures.
         """
         if not hasattr(self, 'config') or not self.config:
-            print("❌ No configuration loaded")
+            print(" No configuration loaded")
             return False
             
-        print("🔍 VALIDATING CONFIGURATION PARAMETERS")
+        print(" VALIDATING CONFIGURATION PARAMETERS")
         print("=" * 50)
         
         # Define expected parameters for each method
@@ -650,7 +763,7 @@ class HS_preprocessor:
             'solar_correction': ['teflon_edge_coord', 'reference_teflon', 'smooth_window'],
             'spectral_smoothing': ['sigma', 'mode'],
             'normalization': ['to_wl', 'clip_to', 'method'],
-            'mask_extraction': ['pri_thr', 'ndvi_thr', 'hbsi_thr', 'min_pix_size', 'repeat', 'show_visualization']
+            'mask_extraction': ['pri_thr', 'ndvi_thr', 'hbsi_thr', 'min_pix_size', 'repeat', 'show']
         }
         
         # Define metadata parameters that are acceptable but filtered out during execution
@@ -675,23 +788,23 @@ class HS_preprocessor:
                 # Check for unexpected parameters (excluding known metadata)
                 unexpected = config_params - expected_set - metadata_set
                 if unexpected:
-                    print(f"⚠️  {step}: Unexpected parameters: {list(unexpected)}")
+                    print(f"  {step}: Unexpected parameters: {list(unexpected)}")
                     all_valid = False
                 
                 # Report metadata parameters that will be filtered
                 metadata_found = config_params & metadata_set
                 if metadata_found:
-                    print(f"ℹ️  {step}: Metadata parameters (filtered): {list(metadata_found)}")
+                    print(f"  {step}: Metadata parameters (filtered): {list(metadata_found)}")
                 
                 # Check for missing required parameters (only warn, don't fail)
                 missing = expected_set - config_params
                 if missing:
-                    print(f"ℹ️  {step}: Missing optional parameters: {list(missing)}")
+                    print(f"  {step}: Missing optional parameters: {list(missing)}")
                 
                 if not unexpected:
-                    print(f"✅ {step}: Parameters valid")
+                    print(f" {step}: Parameters valid")
             else:
-                print(f"ℹ️  {step}: Section missing from config")
+                print(f"  {step}: Section missing from config")
         
         print("=" * 50)
         return all_valid
@@ -834,17 +947,17 @@ class HS_preprocessor:
             json.dump(config_to_save, f, indent=2, default=str)
         
         if self.verbose:
-            print(f"✓ Configuration saved to: {filepath}")
+            print(f" Configuration saved to: {filepath}")
             if self.reference_teflon is not None:
                 ref_info = self.get_reference_teflon_data()
                 if ref_info:
-                    print(f"  ✓ Included reference teflon spectrum ({ref_info['num_bands']} bands, {ref_info['format']} format)")
+                    print(f"   Included reference teflon spectrum ({ref_info['num_bands']} bands, {ref_info['format']} format)")
                     if ref_info['wavelength_range'] != 'unknown':
                         print(f"    Wavelength range: {ref_info['wavelength_range']}")
             # Include metadata info about the stored reference teflon if available
             if hasattr(self, 'reference_teflon_meta') and self.reference_teflon_meta is not None:
                 if self.reference_teflon_meta.get('despiked'):
-                    print(f"  ✓ Reference teflon metadata: despiked=True, params={self.reference_teflon_meta.get('spike_removal_params')}")
+                    print(f"   Reference teflon metadata: despiked=True, params={self.reference_teflon_meta.get('spike_removal_params')}")
     
     def load_config(self, filepath):
         """Load configuration from JSON file, including reference teflon spectrum with wavelengths."""
@@ -862,9 +975,9 @@ class HS_preprocessor:
                 # New format: {wavelength: reflectance}
                 self.reference_teflon = {float(k): float(v) for k, v in ref_data['data'].items()}
                 if self.verbose:
-                    print(f"✓ Configuration loaded from: {filepath}")
+                    print(f" Configuration loaded from: {filepath}")
                     wavelengths = sorted(self.reference_teflon.keys())
-                    print(f"  ✓ Restored reference teflon spectrum ({len(wavelengths)} bands)")
+                    print(f"   Restored reference teflon spectrum ({len(wavelengths)} bands)")
                     print(f"    Wavelength range: {wavelengths[0]:.1f}-{wavelengths[-1]:.1f} nm")
                     
             elif format_type == 'legacy_dict':
@@ -876,52 +989,52 @@ class HS_preprocessor:
                     self.reference_teflon = {
                         'spectrum': spectrum,
                         'wavelengths': wavelengths,
-                        'format_version': '2.0'
+                        'format_version': '0.2'
                     }
                     if self.verbose:
-                        print(f"✓ Configuration loaded from: {filepath}")
-                        print(f"  ✓ Restored reference teflon spectrum ({len(spectrum)} bands, legacy dict format)")
+                        print(f" Configuration loaded from: {filepath}")
+                        print(f"   Restored reference teflon spectrum ({len(spectrum)} bands, legacy dict format)")
                         print(f"    Wavelength range: {wavelengths[0]:.1f}-{wavelengths[-1]:.1f} nm")
                 else:
                     self.reference_teflon = spectrum
                     if self.verbose:
-                        print(f"✓ Configuration loaded from: {filepath}")
-                        print(f"  ✓ Restored reference teflon spectrum ({len(spectrum)} bands, legacy dict format, no wavelengths)")
+                        print(f" Configuration loaded from: {filepath}")
+                        print(f"   Restored reference teflon spectrum ({len(spectrum)} bands, legacy dict format, no wavelengths)")
                         
             elif format_type == 'legacy_array':
                 # Legacy array format
                 self.reference_teflon = np.array(ref_data['data'])
                 if self.verbose:
-                    print(f"✓ Configuration loaded from: {filepath}")
-                    print(f"  ✓ Restored reference teflon spectrum ({len(self.reference_teflon)} bands, legacy array format)")
-                    print(f"  ⚠ Warning: No wavelength information found. Consider regenerating for multi-camera compatibility")
+                    print(f" Configuration loaded from: {filepath}")
+                    print(f"   Restored reference teflon spectrum ({len(self.reference_teflon)} bands, legacy array format)")
+                    print(f"   Warning: No wavelength information found. Consider regenerating for multi-camera compatibility")
             else:
                 # Unknown format
                 self.reference_teflon = ref_data['data']
                 if self.verbose:
-                    print(f"✓ Configuration loaded from: {filepath}")
-                    print(f"  ⚠ Warning: Unknown reference teflon format: {format_type}")
+                    print(f" Configuration loaded from: {filepath}")
+                    print(f"   Warning: Unknown reference teflon format: {format_type}")
                     
         elif 'reference_teflon' in saved_config and saved_config['reference_teflon'] is not None:
             # Old config file format - spectrum only (backward compatibility)
             self.reference_teflon = np.array(saved_config['reference_teflon'])
             if self.verbose:
-                print(f"✓ Configuration loaded from: {filepath}")
-                print(f"  ✓ Restored reference teflon spectrum ({len(self.reference_teflon)} bands) - legacy format")
-                print(f"  ⚠ Warning: No wavelength information found. Consider regenerating for multi-camera compatibility")
+                print(f" Configuration loaded from: {filepath}")
+                print(f"   Restored reference teflon spectrum ({len(self.reference_teflon)} bands) - legacy format")
+                print(f"   Warning: No wavelength information found. Consider regenerating for multi-camera compatibility")
                 
         else:
             # No reference teflon
             self.reference_teflon = None
             if self.verbose:
-                print(f"✓ Configuration loaded from: {filepath}")
+                print(f" Configuration loaded from: {filepath}")
                 print(f"  ℹ No reference teflon spectrum found in config")
         # Restore metadata about the saved reference (if present)
         self.reference_teflon_meta = saved_config.get('reference_teflon_meta', None)
         if self.verbose and self.reference_teflon_meta is not None:
             despiked = self.reference_teflon_meta.get('despiked', False)
             if despiked:
-                print(f"  ✓ Reference teflon metadata: despiked=True, params={self.reference_teflon_meta.get('spike_removal_params')}")
+                print(f"   Reference teflon metadata: despiked=True, params={self.reference_teflon_meta.get('spike_removal_params')}")
         
         return self
     
@@ -945,7 +1058,8 @@ class HS_preprocessor:
             clip_to: Maximum reflectance value for sensor calibration
             
         Returns:
-            numpy.ndarray: Reference teflon spectrum mapped to current wavelength range
+            dict: Dictionary compatible with plot_spectra function containing:
+                  {"Reference side teflon": {"spectrum": array, "wavelengths": array, "roi": None}}
         """
         # Check if we have a current image to map to
         if not hasattr(self, 'image') or self.image is None:
@@ -1003,10 +1117,10 @@ class HS_preprocessor:
                         # Apply despiking to the calibrated temporary image
                         temp_processor.remove_spectral_spikes(win=win, k=k, replace=replace)
                         if self.verbose:
-                            print(f"  ✓ Applied despiking to {os.path.basename(hs_image_path)} (win={win}, k={k}, replace={replace})")
+                            print(f"   Applied despiking to {os.path.basename(hs_image_path)} (win={win}, k={k}, replace={replace})")
                     except Exception as e:
                         if self.verbose:
-                            print(f"  ⚠ Warning: despiking failed for {os.path.basename(hs_image_path)}: {e}")
+                            print(f"   Warning: despiking failed for {os.path.basename(hs_image_path)}: {e}")
 
                 # Extract teflon spectrum from the edge (in source wavelength space)
                 teflon_spectrum = temp_processor.image.img[:, teflon_edge_coord[0]:teflon_edge_coord[1], :].mean(axis=(0,1))
@@ -1059,15 +1173,22 @@ class HS_preprocessor:
         }
         
         if self.verbose:
-            print(f"✓ Created reference teflon from {len(teflon_spectra)} images")
+            print(f" Created reference teflon from {len(teflon_spectra)} images")
             wl_range = f"{target_wavelengths[0]:.1f}-{target_wavelengths[-1]:.1f} nm"
-            print(f"  ✓ Stored reference teflon spectrum ({len(reference_teflon_mapped)} bands) with wavelength keys")
+            print(f"   Stored reference teflon spectrum ({len(reference_teflon_mapped)} bands) with wavelength keys")
             print(f"    Target wavelength range: {wl_range}")
             print(f"    Access example: reference_teflon[{target_wavelengths[len(target_wavelengths)//2]:.1f}] = {reference_teflon_mapped[len(reference_teflon_mapped)//2]:.4f}")
             if self.reference_teflon_meta.get('mapped', False):
-                print(f"    ✓ Mapped from source range: {self.reference_teflon_meta['source_range']}")
+                print(f"     Mapped from source range: {self.reference_teflon_meta['source_range']}")
         
-        return reference_teflon_mapped
+        # Return dictionary compatible with plot_spectra function
+        return {
+            "Reference side teflon": {
+                "spectrum": reference_teflon_mapped,
+                "wavelengths": target_wavelengths,
+                "roi": None  # No specific ROI for reference teflon
+            }
+        }
 
     @staticmethod
     def create_config_template():
@@ -1117,7 +1238,7 @@ class HS_preprocessor:
     @staticmethod
     def process_folder(folder_path, white_ref_path=None, reference_teflon=None, 
                       config=None, config_path=None, pattern="*Data.hdr", verbose=True,
-                      extract_masks=True):
+                      extract_masks=True, return_df=False):
         """
         Process all hyperspectral images in a folder with integrated mask extraction.
         
@@ -1130,9 +1251,13 @@ class HS_preprocessor:
             pattern (str): File pattern to match (default: "*Data.hdr")
             verbose (bool): Enable verbose output
             extract_masks (bool): Whether to extract masks as final step
+            return_df (bool): If True, return concatenated DataFrame instead of images dict.
+                             This processes images one by one to avoid memory overflow.
             
         Returns:
-            dict: Dictionary of processed images with masks {filename: HS_image}
+            dict or pd.DataFrame: 
+                - If return_df=False: Dictionary of processed images with masks {filename: HS_image}
+                - If return_df=True: Concatenated DataFrame with spectral data from all images
         """
         # Load config from file if config_path is provided
         loaded_config = None
@@ -1150,7 +1275,7 @@ class HS_preprocessor:
             loaded_reference_teflon = temp_processor.reference_teflon
             
             if verbose:
-                print(f"  ✓ Loaded configuration with {len(loaded_config)} pipeline steps")
+                print(f"   Loaded configuration with {len(loaded_config)} pipeline steps")
                 if loaded_reference_teflon is not None:
                     if isinstance(loaded_reference_teflon, dict) and all(isinstance(k, (int, float)) for k in loaded_reference_teflon.keys()):
                         wl_keys = sorted(loaded_reference_teflon.keys())
@@ -1171,79 +1296,204 @@ class HS_preprocessor:
         if not image_paths:
             if verbose:
                 print(f"No images found matching pattern '{pattern}' in {folder_path}")
-            return {}
+            if return_df:
+                return pd.DataFrame()
+            else:
+                return {}
         
         if verbose:
             print(f"Found {len(image_paths)} images to process")
         
-        results = {}
-        
-        for img_path in image_paths:
-            try:
-                filename = os.path.basename(img_path)
-                if verbose:
-                    print(f"\nProcessing: {filename}")
-                
-                # Create processor and run pipeline (inherit verbose setting)
-                processor = HS_preprocessor(img_path, verbose=verbose)
-                
-                # Set the processor's config from the loaded/provided configuration
-                if final_config is not None:
-                    processor.config = final_config.copy()
-                
-                # Set reference teflon if provided
-                if final_reference_teflon is not None:
-                    if isinstance(final_reference_teflon, dict):
-                        # Check if it's the new wavelength-as-keys format
-                        if all(isinstance(k, (int, float)) for k in final_reference_teflon.keys()):
-                            # Already in new format
-                            processor.reference_teflon = final_reference_teflon.copy()
-                        elif 'spectrum' in final_reference_teflon:
-                            # Legacy dictionary format
-                            processor.reference_teflon = final_reference_teflon.copy()
+        if return_df:
+            # Memory-efficient processing for DataFrame output
+            extracted_spectra = []
+            successful_count = 0
+            
+            for img_path in image_paths:
+                try:
+                    filename = os.path.basename(img_path)
+                    if verbose:
+                        print(f"\nProcessing: {filename}")
+                    
+                    # Create processor and run pipeline (inherit verbose setting)
+                    processor = HS_preprocessor(img_path, verbose=verbose)
+                    
+                    # Set the processor's config from the loaded/provided configuration
+                    if final_config is not None:
+                        processor.config = final_config.copy()
+                    
+                    # Set reference teflon if provided
+                    if final_reference_teflon is not None:
+                        if isinstance(final_reference_teflon, dict):
+                            # Check if it's the new wavelength-as-keys format
+                            if all(isinstance(k, (int, float)) for k in final_reference_teflon.keys()):
+                                # Already in new format
+                                processor.reference_teflon = final_reference_teflon.copy()
+                            elif 'spectrum' in final_reference_teflon:
+                                # Legacy dictionary format
+                                processor.reference_teflon = final_reference_teflon.copy()
+                            else:
+                                # Unknown dict format
+                                processor.reference_teflon = final_reference_teflon
+                                if verbose:
+                                    print(f"Warning: Unknown reference teflon dictionary format for {filename}")
                         else:
-                            # Unknown dict format
+                            # Legacy array format
                             processor.reference_teflon = final_reference_teflon
                             if verbose:
-                                print(f"Warning: Unknown reference teflon dictionary format for {filename}")
+                                print(f"Warning: Using legacy reference teflon array format for {filename}")
+                    
+                    # Set up config override for external parameters
+                    config_override = {}
+                    
+                    # Add white reference path to sensor calibration config if provided
+                    if white_ref_path:
+                        config_override['sensor_calibration'] = {'white_ref_path': white_ref_path}
+                    
+                    processor.run_full_pipeline(config_override=config_override if config_override else None,
+                                              extract_masks_flag=extract_masks)
+                    
+                    # Get processed image
+                    hs_image = processor.get_current_image()
+                    
+                    if verbose:
+                        print(f"Completed: {filename}")
+                        if extract_masks and hasattr(hs_image, 'mask') and hs_image.mask is not None:
+                            mask_pixels = np.sum(hs_image.mask)
+                            total_pixels = hs_image.mask.shape[0] * hs_image.mask.shape[1]
+                            print(f"Mask: {mask_pixels}/{total_pixels} pixels ({100*mask_pixels/total_pixels:.1f}%)")
+                    
+                    # Extract spectral data immediately to avoid memory accumulation
+                    if hs_image is not None and hasattr(hs_image, 'mask') and hs_image.mask is not None:
+                        # Apply mask to the image
+                        masked_image = hs_image.img * hs_image.mask
+                        
+                        # Reshape to 2D: (pixels, bands)
+                        masked_img_flat = masked_image.reshape(-1, masked_image.shape[2])
+                        
+                        # Filter out zero pixels (non-masked pixels)
+                        masked_img_filtered = masked_img_flat[~np.all(masked_img_flat == 0, axis=1)]
+                        
+                        if len(masked_img_filtered) > 0:
+                            # Create DataFrame with wavelengths as column names
+                            masked_img_df = pd.DataFrame(masked_img_filtered, columns=hs_image.ind)
+                            
+                            # Extract label from filename (format: "X-X-LABEL-X-...")
+                            try:
+                                label = hs_image.name.split("-")[2] if hasattr(hs_image, 'name') else filename.split("-")[2]
+                            except IndexError:
+                                label = "unknown"
+                            
+                            masked_img_df['label'] = label
+                            extracted_spectra.append(masked_img_df)
+                            
+                            if verbose:
+                                print(f"Extracted {len(masked_img_filtered)} masked pixels from {filename}")
+                        else:
+                            if verbose:
+                                print(f"No masked pixels found in {filename}")
                     else:
-                        # Legacy array format
-                        processor.reference_teflon = final_reference_teflon
                         if verbose:
-                            print(f"Warning: Using legacy reference teflon array format for {filename}")
-                
-                # Set up config override for external parameters
-                config_override = {}
-                
-                # Add white reference path to sensor calibration config if provided
-                if white_ref_path:
-                    config_override['sensor_calibration'] = {'white_ref_path': white_ref_path}
-                
-                processor.run_full_pipeline(config_override=config_override if config_override else None,
-                                          extract_masks_flag=extract_masks)
-                
-                # Store result
-                results[filename] = processor.get_current_image()
-                
+                            print(f"Skipping spectral extraction for {filename}: no image or mask data")
+                    
+                    successful_count += 1
+                    
+                    # Clear memory by deleting the processor and image
+                    del processor
+                    del hs_image
+                    
+                except Exception as e:
+                    if verbose:
+                        print(f"Failed {filename}: {str(e)}")
+            
+            if verbose:
+                print(f"\nProcessed {successful_count}/{len(image_paths)} images successfully")
+            
+            if not extracted_spectra:
                 if verbose:
-                    print(f"Completed: {filename}")
-                    if extract_masks and hasattr(processor.image, 'mask'):
-                        mask_pixels = np.sum(processor.image.mask)
-                        total_pixels = processor.image.mask.shape[0] * processor.image.mask.shape[1]
-                        print(f"Mask: {mask_pixels}/{total_pixels} pixels ({100*mask_pixels/total_pixels:.1f}%)")
-                
-            except Exception as e:
-                if verbose:
-                    print(f"Failed {filename}: {str(e)}")
-                results[filename] = None
+                    print("No spectral data extracted!")
+                return pd.DataFrame()
+            
+            # Concatenate all DataFrames
+            concatenated_df = pd.concat(extracted_spectra, axis=0, ignore_index=True)
+            
+            if verbose:
+                print(f"Total extracted spectra: {len(concatenated_df)} pixels from {len(extracted_spectra)} images")
+                print(f"DataFrame shape: {concatenated_df.shape}")
+                print(f"Labels found: {concatenated_df['label'].unique()}")
+            
+            return concatenated_df
         
-        if verbose:
-            successful_results = [r for r in results.values() if r is not None]
-            print(f"\nProcessed {len(successful_results)}/{len(image_paths)} images successfully")
-            if extract_masks:
-                mask_count = sum(1 for r in successful_results if hasattr(r, 'mask') and r.mask is not None)
-                print(f"Masks extracted for {mask_count}/{len(successful_results)} processed images")
-        return results
+        else:
+            # Original behavior: return dictionary of processed images
+            results = {}
+            
+            for img_path in image_paths:
+                try:
+                    filename = os.path.basename(img_path)
+                    if verbose:
+                        print(f"\nProcessing: {filename}")
+                    
+                    # Create processor and run pipeline (inherit verbose setting)
+                    processor = HS_preprocessor(img_path, verbose=verbose)
+                    
+                    # Set the processor's config from the loaded/provided configuration
+                    if final_config is not None:
+                        processor.config = final_config.copy()
+                    
+                    # Set reference teflon if provided
+                    if final_reference_teflon is not None:
+                        if isinstance(final_reference_teflon, dict):
+                            # Check if it's the new wavelength-as-keys format
+                            if all(isinstance(k, (int, float)) for k in final_reference_teflon.keys()):
+                                # Already in new format
+                                processor.reference_teflon = final_reference_teflon.copy()
+                            elif 'spectrum' in final_reference_teflon:
+                                # Legacy dictionary format
+                                processor.reference_teflon = final_reference_teflon.copy()
+                            else:
+                                # Unknown dict format
+                                processor.reference_teflon = final_reference_teflon
+                                if verbose:
+                                    print(f"Warning: Unknown reference teflon dictionary format for {filename}")
+                        else:
+                            # Legacy array format
+                            processor.reference_teflon = final_reference_teflon
+                            if verbose:
+                                print(f"Warning: Using legacy reference teflon array format for {filename}")
+                    
+                    # Set up config override for external parameters
+                    config_override = {}
+                    
+                    # Add white reference path to sensor calibration config if provided
+                    if white_ref_path:
+                        config_override['sensor_calibration'] = {'white_ref_path': white_ref_path}
+                    
+                    processor.run_full_pipeline(config_override=config_override if config_override else None,
+                                              extract_masks_flag=extract_masks)
+                    
+                    # Store result
+                    results[filename] = processor.get_current_image()
+                    
+                    if verbose:
+                        print(f"Completed: {filename}")
+                        if extract_masks and hasattr(processor.image, 'mask'):
+                            mask_pixels = np.sum(processor.image.mask)
+                            total_pixels = processor.image.mask.shape[0] * processor.image.mask.shape[1]
+                            print(f"Mask: {mask_pixels}/{total_pixels} pixels ({100*mask_pixels/total_pixels:.1f}%)")
+                    
+                except Exception as e:
+                    if verbose:
+                        print(f"Failed {filename}: {str(e)}")
+                    results[filename] = None
+            
+            if verbose:
+                successful_results = [r for r in results.values() if r is not None]
+                print(f"\nProcessed {len(successful_results)}/{len(image_paths)} images successfully")
+                if extract_masks:
+                    mask_count = sum(1 for r in successful_results if hasattr(r, 'mask') and r.mask is not None)
+                    print(f"Masks extracted for {mask_count}/{len(successful_results)} processed images")
+            return results
     
     
     
@@ -1276,12 +1526,6 @@ class HS_preprocessor:
             'cropped_range': f"{self.image.ind[0]}-{self.image.ind[-1]} nm"
         }
         self.step_results['spectral_cropped'] = copy.deepcopy(self.image)
-        
-        if self.verbose:
-            print(f"✓ Spectral range cropping completed")
-            print(f"  Range: {original_range} → {self.config['spectral_cropping']['cropped_range']}")
-            print(f"  Bands: {original_bands} → {len(self.image.ind)}")
-        
         return self
     
     def sensor_calibration(self, white_ref_path=None, dark_calibration=False, clip_to=10):
@@ -1313,7 +1557,7 @@ class HS_preprocessor:
         self.step_results['sensor_calibrated'] = copy.deepcopy(self.image)
         
         if self.verbose:
-            print(f"✓ Applied sensor calibration (clip_to={clip_to}, dark_cal={dark_calibration})")
+            print(f" Applied sensor calibration (clip_to={clip_to}, dark_cal={dark_calibration})")
             if white_ref_path:
                 print(f"  Used external white reference: {os.path.basename(white_ref_path)}")
             else:
@@ -1410,7 +1654,7 @@ class HS_preprocessor:
                 reference_source = "stored_legacy_array"
                 if self.verbose:
                     print("  Using stored reference teflon spectrum (legacy array format - assuming wavelengths match)")
-                    print("  ⚠ Warning: Consider regenerating reference with wavelength information for multi-camera compatibility")
+                    print("   Warning: Consider regenerating reference with wavelength information for multi-camera compatibility")
         else:
             # Create idealized teflon spectrum (lowest priority)
             wavelengths = np.array(self.image.ind)
@@ -1426,7 +1670,7 @@ class HS_preprocessor:
             current_wavelengths = np.array(self.image.ind)
             self.reference_teflon = {float(wl): float(refl) for wl, refl in zip(current_wavelengths, reference_teflon)}
             if self.verbose:
-                print(f"  ✓ Stored reference teflon spectrum with {len(self.reference_teflon)} wavelength keys")
+                print(f"   Stored reference teflon spectrum with {len(self.reference_teflon)} wavelength keys")
         
         # Apply smoothing to the reference if needed
         if reference_source != "synthetic":
@@ -1456,7 +1700,7 @@ class HS_preprocessor:
         self.solar_correction_applied = True
         
         if self.verbose:
-            print(f"✓ Applied solar spectrum correction (window={smooth_window}, source={reference_source})")
+            print(f" Applied solar spectrum correction (window={smooth_window}, source={reference_source})")
         return self
     
     def spectral_smoothing(self, sigma=11, mode='reflect'):
@@ -1477,7 +1721,7 @@ class HS_preprocessor:
         self.step_results['smoothed'] = copy.deepcopy(self.image)
         
         if self.verbose:
-            print(f"✓ Applied spectral smoothing (sigma={sigma})")
+            print(f" Applied spectral smoothing (sigma={sigma})")
         return self
     
     def remove_spectral_spikes(self, win=7, k=6.0, replace="median"):
@@ -1523,7 +1767,7 @@ class HS_preprocessor:
         # Get image dimensions
         rows, cols, bands = self.image.img.shape
         total_pixels = rows * cols
-        spike_count = 0
+
         
         # Process each pixel spectrum
         for i in range(rows):
@@ -1544,20 +1788,17 @@ class HS_preprocessor:
                 self.image.img[i, j, :] = cleaned_spectrum
                 
                 # Count spikes for reporting
-                spike_count += np.sum(spike_mask)
+
         
         # Store configuration and results
         self.config['spike_removal'] = {
             'win': win, 
             'k': k, 
-            'replace': replace,
-            'spikes_detected': int(spike_count)
+            'replace': replace
+
         }
         self.step_results['spike_removed'] = copy.deepcopy(self.image)
         
-        if self.verbose:
-            spike_rate = spike_count / (total_pixels * bands) * 100
-            print(f"✓ Removed {spike_count} spectral spikes ({spike_rate:.3f}% of all measurements)")
         
         return self
     
@@ -1675,7 +1916,7 @@ class HS_preprocessor:
                 
                 self.image.normalized = True
                 if self.verbose:
-                    print(f"✓ Applied SNV normalization along spectral axis")
+                    print(f" Applied SNV normalization along spectral axis")
         
         elif method == "to_wl":
             # Original wavelength-specific normalization
@@ -1690,7 +1931,7 @@ class HS_preprocessor:
                 self.image.normalize(to_wl=to_wl, clip_to=clip_to)
             
             if self.verbose:
-                print(f"✓ Applied final normalization to {to_wl}nm (clip_to={clip_to})")
+                print(f" Applied final normalization to {to_wl}nm (clip_to={clip_to})")
         
         else:
             raise ValueError(f"Unknown normalization method: {method}. Use 'to_wl' or 'snv'")
@@ -1814,7 +2055,7 @@ class HS_preprocessor:
             B = enhance_contrast(B)
                 
             if self.verbose:
-                print(f"  ✓ Applied robust normalization: R[{np.min(R):.3f}, {np.max(R):.3f}], G[{np.min(G):.3f}, {np.max(G):.3f}], B[{np.min(B):.3f}, {np.max(B):.3f}]")
+                print(f"   Applied robust normalization: R[{np.min(R):.3f}, {np.max(R):.3f}], G[{np.min(G):.3f}, {np.max(G):.3f}], B[{np.min(B):.3f}, {np.max(B):.3f}]")
         
         elif normalize:
             # Traditional normalization for non-SNV data
@@ -2013,11 +2254,8 @@ class HS_preprocessor:
         else:
             return rgb_img
 
-
-
     
     
-    @staticmethod
     @staticmethod
     def extract_masked_spectra_to_df(processed_images_dict, save_path=None, segmentation=False, verbose=True):
         """
@@ -2054,7 +2292,7 @@ class HS_preprocessor:
         total_pixels = 0
         
         if verbose:
-            print(f"🔄 Processing {len(processed_images_dict)} images...")
+            print(f" Processing {len(processed_images_dict)} images...")
 
         for i, (filename, hs_image) in enumerate(processed_images_dict.items()):
             if verbose:
@@ -2063,17 +2301,17 @@ class HS_preprocessor:
             # Validation checks
             if hs_image is None or not hasattr(hs_image, 'img') or hs_image.img is None:
                 if verbose:
-                    print(f"    ⚠️ Skipping: no image data")
+                    print(f"    Skipping: no image data")
                 continue
             if not hasattr(hs_image, 'mask') or hs_image.mask is None:
                 if verbose:
-                    print(f"    ⚠️ Skipping: no mask data")
+                    print(f"    Skipping: no mask data")
                 continue
 
             img = hs_image.img  # (H, W, B)
             if img.ndim != 3:
                 if verbose:
-                    print(f"    ⚠️ Skipping: unexpected image shape {img.shape}")
+                    print(f"    Skipping: unexpected image shape {img.shape}")
                 continue
 
             H, W, B = img.shape
@@ -2093,17 +2331,17 @@ class HS_preprocessor:
                 mask_2d = mask.astype(bool)
             else:
                 if verbose:
-                    print(f"    ⚠️ Skipping: unexpected mask shape {mask.shape}")
+                    print(f"    Skipping: unexpected mask shape {mask.shape}")
                 continue
 
             # Wavelengths validation
             if not hasattr(hs_image, 'ind'):
                 if verbose:
-                    print(f"    ⚠️ Skipping: hs_image.ind (wavelengths) not found")
+                    print(f"    Skipping: hs_image.ind (wavelengths) not found")
                 continue
             if len(hs_image.ind) != B:
                 if verbose:
-                    print(f"    ⚠️ Skipping: wavelengths length {len(hs_image.ind)} != bands {B}")
+                    print(f"    Skipping: wavelengths length {len(hs_image.ind)} != bands {B}")
                 continue
 
             # Generate label from name or filename
@@ -2138,25 +2376,25 @@ class HS_preprocessor:
                     bg_count = 0
                     
                 if verbose:
-                    print(f"    ✅ Extracted {fg_count} FG + {bg_count} BG pixels")
+                    print(f"     Extracted {fg_count} FG + {bg_count} BG pixels")
             else:
                 if verbose:
-                    print(f"    ✅ Extracted {fg_count} FG pixels")
+                    print(f"     Extracted {fg_count} FG pixels")
 
         if not all_spectra:
             if verbose:
-                print("❌ No spectral data extracted!")
+                print(" No spectral data extracted!")
             return pd.DataFrame()
 
         # Concatenate all spectra efficiently
         if verbose:
-            print(f"📊 Combining {total_pixels} total pixels...")
+            print(f" Combining {total_pixels} total pixels...")
             
         combined_spectra = np.vstack(all_spectra)
         
         # Create DataFrame efficiently
         if verbose:
-            print(f"📋 Creating DataFrame...")
+            print(f" Creating DataFrame...")
             
         # Get wavelengths from first valid image
         wavelengths = None
@@ -2174,14 +2412,14 @@ class HS_preprocessor:
 
         elapsed = time.time() - start_time
         if verbose:
-            print(f"✅ Extraction completed in {elapsed:.2f}s")
-            print(f"📊 Final dataset: {len(df)} pixels × {len(wavelengths)} wavelengths")
+            print(f" Extraction completed in {elapsed:.2f}s")
+            print(f" Final dataset: {len(df)} pixels x {len(wavelengths)} wavelengths")
 
         if save_path is not None:
             if verbose:
-                print(f"💾 Saving to {save_path}...")
+                print(f"Saving to {save_path}...")
             df.to_csv(save_path, index=False)
             if verbose:
-                print(f"✅ Saved successfully")
+                print(f" Saved successfully")
 
         return df
