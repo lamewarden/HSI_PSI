@@ -267,7 +267,7 @@ class HS_preprocessor:
   
     
     def extract_masks(self, pri_thr=None, ndvi_thr=None, hbsi_thr=None, min_pix_size=None, 
-                     repeat=10, show_visualization=True):
+                     repeat=10, show=True):
         """Step 7: Extract vegetation masks using vegetation indices."""
         
         # Use parameters from loaded config if available, otherwise use provided parameters or hardcoded defaults
@@ -344,7 +344,7 @@ class HS_preprocessor:
         pri_mask = (pri_image < pri_thr)[:,:,np.newaxis]
 
         # Display all vegetation indices for calibration
-        if show_visualization:
+        if show:
             orig_rgb = self.get_rgb_sample(normalize=True, correct=False, show=False)
             
             fig, axes = plt.subplots(2, 3, figsize=(18, 6))
@@ -398,7 +398,7 @@ class HS_preprocessor:
         # Store result for visualization
         self.step_results['mask_extraction'] = copy.deepcopy(self.image)
         
-        if show_visualization:
+        if show:
             # Create visualization with proper transparency
             plt.figure(figsize=(8, 4))
             plt.imshow(np.repeat(orig_rgb[:,:,:], repeat, axis=0))
@@ -576,7 +576,7 @@ class HS_preprocessor:
                 })
                 
                 # Don't show visualization in batch processing unless verbose
-                mask_params['show_visualization'] = self.verbose
+                mask_params['show'] = self.verbose
                 
                 self.extract_masks(**mask_params)
                 
@@ -763,7 +763,7 @@ class HS_preprocessor:
             'solar_correction': ['teflon_edge_coord', 'reference_teflon', 'smooth_window'],
             'spectral_smoothing': ['sigma', 'mode'],
             'normalization': ['to_wl', 'clip_to', 'method'],
-            'mask_extraction': ['pri_thr', 'ndvi_thr', 'hbsi_thr', 'min_pix_size', 'repeat', 'show_visualization']
+            'mask_extraction': ['pri_thr', 'ndvi_thr', 'hbsi_thr', 'min_pix_size', 'repeat', 'show']
         }
         
         # Define metadata parameters that are acceptable but filtered out during execution
@@ -1526,12 +1526,6 @@ class HS_preprocessor:
             'cropped_range': f"{self.image.ind[0]}-{self.image.ind[-1]} nm"
         }
         self.step_results['spectral_cropped'] = copy.deepcopy(self.image)
-        
-        if self.verbose:
-            print(f" Spectral range cropping completed")
-            print(f"  Range: {original_range} → {self.config['spectral_cropping']['cropped_range']}")
-            print(f"  Bands: {original_bands} → {len(self.image.ind)}")
-        
         return self
     
     def sensor_calibration(self, white_ref_path=None, dark_calibration=False, clip_to=10):
