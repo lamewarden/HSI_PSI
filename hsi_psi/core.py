@@ -380,7 +380,7 @@ class HS_image:
         
         # Log the cropping operation
         new_wl_range = f"{self.ind[0]}-{self.ind[-1]} nm"
-        print(f"✓ Spectral range cropped: {original_wl_range} → {new_wl_range}")
+
     
         
         return self

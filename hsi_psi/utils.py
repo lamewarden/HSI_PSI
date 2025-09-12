@@ -574,7 +574,7 @@ def print_package_info() -> None:
     print("=" * 60)
     print("HSI_PSI - Hyperspectral Image Processing Package")
     print("=" * 60)
-    print(f"Version: 2.0.0")
+    print(f"Version: 0.2.0")
     print(f"Python: {sys.version.split()[0]}")
     print(f"Platform: {platform.system()} {platform.release()}")
     print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

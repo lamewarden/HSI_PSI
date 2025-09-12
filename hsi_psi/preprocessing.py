@@ -697,7 +697,7 @@ class HS_preprocessor:
         print("=" * 60)
         
         # Image information
-        print("🖼️ IMAGE STATE:")
+        print("IMAGE STATE:")
         if hasattr(self, 'image') and self.image is not None:
             print(f"   Image loaded: {type(self.image).__name__}")
             print(f"   Image shape: {self.image.img.shape}")
@@ -788,23 +788,23 @@ class HS_preprocessor:
                 # Check for unexpected parameters (excluding known metadata)
                 unexpected = config_params - expected_set - metadata_set
                 if unexpected:
-                    print(f"️  {step}: Unexpected parameters: {list(unexpected)}")
+                    print(f"  {step}: Unexpected parameters: {list(unexpected)}")
                     all_valid = False
                 
                 # Report metadata parameters that will be filtered
                 metadata_found = config_params & metadata_set
                 if metadata_found:
-                    print(f"ℹ️  {step}: Metadata parameters (filtered): {list(metadata_found)}")
+                    print(f"  {step}: Metadata parameters (filtered): {list(metadata_found)}")
                 
                 # Check for missing required parameters (only warn, don't fail)
                 missing = expected_set - config_params
                 if missing:
-                    print(f"ℹ️  {step}: Missing optional parameters: {list(missing)}")
+                    print(f"  {step}: Missing optional parameters: {list(missing)}")
                 
                 if not unexpected:
                     print(f" {step}: Parameters valid")
             else:
-                print(f"ℹ️  {step}: Section missing from config")
+                print(f"  {step}: Section missing from config")
         
         print("=" * 50)
         return all_valid
@@ -989,7 +989,7 @@ class HS_preprocessor:
                     self.reference_teflon = {
                         'spectrum': spectrum,
                         'wavelengths': wavelengths,
-                        'format_version': '2.0'
+                        'format_version': '0.2'
                     }
                     if self.verbose:
                         print(f" Configuration loaded from: {filepath}")
@@ -2417,7 +2417,7 @@ class HS_preprocessor:
 
         if save_path is not None:
             if verbose:
-                print(f"💾 Saving to {save_path}...")
+                print(f"Saving to {save_path}...")
             df.to_csv(save_path, index=False)
             if verbose:
                 print(f" Saved successfully")
