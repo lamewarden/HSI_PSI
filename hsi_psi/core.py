@@ -148,13 +148,15 @@ class HS_image:
             stop_index = self.ind.index(stop)
             step = step if step > 0 else 1
 
-            return self.img[:, :, start_index:stop_index:step]
+            data = self.img[:, :, start_index:stop_index:step]
+            return HS_image_Slice(data, self, list(range(start_index, stop_index, step)))
         else:
-            # Handle single wavelength 
+            # Handle single wavelength - return HS_image_Slice for division capability
             wl = int(float(wl))
             closest_wl = self.get_closest_wavelength(wl)
             wl_index = self.ind.index(closest_wl)
-            return self.img[:, :, wl_index]
+            data = self.img[:, :, wl_index]
+            return HS_image_Slice(data, self, [wl_index], wavelength=closest_wl)
     
         
     def __setitem__(self, wl, value):
@@ -164,6 +166,27 @@ class HS_image:
             self.img[:,:,wl_index] = value
         except:
             raise IndexError("Entered wavelength is not in spectrum")
+
+    def __truediv__(self, other):
+        """
+        Enable division between HS_image wavelength slices using the / operator.
+        
+        Usage: result = hs_image1[568] / hs_image2[725]
+        
+        Parameters:
+        -----------
+        other : HS_image slice or HS_image_Slice object
+            The denominator for the division operation
+            
+        Returns:
+        --------
+        np.ndarray
+            2D array (height x width) with the division result
+        """
+        if isinstance(other, HS_image_Slice):
+            return other.__rtruediv__(self)
+        else:
+            raise TypeError(f"Division not supported between HS_image and {type(other)}")
         
     @staticmethod
     def divide_arrays(array_3d, array_other, remove_outliers=False, sigma_threshold=2):
@@ -599,3 +622,133 @@ def convert_header_to_envi(bil_header):
         for wavelength in wavelengths:
             f.write(f'{wavelength},\n')
         f.write('}\n')
+
+
+class HS_image_Slice:
+    """
+    Represents a slice of an HS_image that supports division operations.
+    """
+    
+    def __init__(self, data, parent_image, band_indices, wavelength=None):
+        self.data = data
+        self.parent_image = parent_image
+        self.band_indices = band_indices
+        self.wavelength = wavelength
+        self.shape = data.shape
+        
+    def __truediv__(self, other):
+        """
+        Divide this slice by another HS_image_Slice.
+        
+        Parameters:
+        -----------
+        other : HS_image_Slice
+            The denominator slice
+            
+        Returns:
+        --------
+        np.ndarray
+            2D array with division result, outliers and invalid values handled
+        """
+        if not isinstance(other, HS_image_Slice):
+            raise TypeError("Can only divide HS_image slices by other HS_image slices")
+            
+        return self._perform_division(self.data, other.data)
+    
+    def __rtruediv__(self, other):
+        """
+        Handle division when this slice is the denominator.
+        """
+        if not isinstance(other, HS_image_Slice):
+            raise TypeError("Can only divide HS_image slices by other HS_image slices")
+            
+        return self._perform_division(other.data, self.data)
+    
+    @staticmethod
+    def _perform_division(numerator, denominator, 
+                         zero_threshold=1e-6, 
+                         outlier_threshold=3.0,
+                         max_value_cap=100.0):
+        """
+        Perform robust division with outlier removal and error handling.
+        
+        Parameters:
+        -----------
+        numerator : np.ndarray
+            2D or 3D array (numerator)
+        denominator : np.ndarray  
+            2D or 3D array (denominator)
+        zero_threshold : float
+            Threshold below which denominator values are considered zero
+        outlier_threshold : float
+            Number of standard deviations for outlier detection
+        max_value_cap : float
+            Maximum allowed value to cap extreme results
+            
+        Returns:
+        --------
+        np.ndarray
+            2D array with robust division result
+        """
+        
+        # Ensure we're working with 2D arrays (single band)
+        if numerator.ndim == 3:
+            numerator = numerator.squeeze()
+        if denominator.ndim == 3:
+            denominator = denominator.squeeze()
+            
+        # Check dimensions compatibility
+        if numerator.shape != denominator.shape:
+            raise ValueError(f"Image dimensions must match: {numerator.shape} vs {denominator.shape}")
+        
+        # Convert to float for precise calculations
+        num = numerator.astype(np.float64)
+        den = denominator.astype(np.float64)
+        
+        # Create mask for valid divisions (denominator not near zero)
+        valid_mask = np.abs(den) > zero_threshold
+        
+        # Initialize result array
+        result = np.zeros_like(num)
+        
+        # Perform division only where denominator is not near zero
+        with np.errstate(divide='ignore', invalid='ignore'):
+            result[valid_mask] = num[valid_mask] / den[valid_mask]
+        
+        # Handle invalid values
+        result[np.isnan(result)] = 0.0
+        result[np.isinf(result)] = 0.0
+        
+        # Cap extreme values
+        result = np.clip(result, -max_value_cap, max_value_cap)
+        
+        # Remove outliers using robust statistics
+        if outlier_threshold > 0 and np.any(valid_mask):
+            # Calculate median and MAD (Median Absolute Deviation) for robust statistics
+            valid_values = result[valid_mask]
+            if len(valid_values) > 0:
+                median_val = np.median(valid_values)
+                mad = np.median(np.abs(valid_values - median_val))
+                
+                # Convert MAD to approximate standard deviation
+                robust_std = mad * 1.4826  # Factor to approximate std from MAD
+                
+                if robust_std > 0:
+                    # Identify outliers
+                    outlier_mask = np.abs(result - median_val) > (outlier_threshold * robust_std)
+                    
+                    # Replace outliers with median
+                    result[outlier_mask] = median_val
+        
+        # Set invalid division results to zero
+        result[~valid_mask] = 0.0
+        
+        return result
+    
+    def __array__(self):
+        """Allow numpy operations on the slice."""
+        return self.data
+    
+    def __repr__(self):
+        wl_info = f" at {self.wavelength}nm" if self.wavelength else ""
+        return f"HS_image_Slice{wl_info} {self.shape}"
