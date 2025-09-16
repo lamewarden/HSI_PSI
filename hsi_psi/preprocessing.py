@@ -24,7 +24,7 @@ class HS_preprocessor:
     
     Features:
     - All original HS_preprocessor functionality preserved
-    - Integrated mask extraction using vegetation indices (NDVI, HBSI, PRI)
+    - Integrated mask extraction using vegetation indices (NDVI, BNDVI, PRI)
     - Configurable segmentation parameters stored in config file
     - Mask storage as hs_image.mask attribute
     - Updated run_full_pipeline with mask extraction as final step
@@ -266,7 +266,7 @@ class HS_preprocessor:
 
   
     
-    def extract_masks(self, pri_thr=None, ndvi_thr=None, hbsi_thr=None, min_pix_size=None, 
+    def extract_masks(self, pri_thr=None, ndvi_thr=None, bndvi_thr=None, min_pix_size=None, 
                      repeat=10, show=True):
         """Step 7: Extract vegetation masks using vegetation indices."""
         
@@ -275,8 +275,8 @@ class HS_preprocessor:
             pri_thr = self.config.get('mask_extraction', {}).get('pri_thr', -0.1)
         if ndvi_thr is None:
             ndvi_thr = self.config.get('mask_extraction', {}).get('ndvi_thr', 0.2)
-        if hbsi_thr is None:
-            hbsi_thr = self.config.get('mask_extraction', {}).get('hbsi_thr', -0.6)
+        if bndvi_thr is None:
+            bndvi_thr = self.config.get('mask_extraction', {}).get('bndvi_thr', -0.6)
         if min_pix_size is None:
             min_pix_size = self.config.get('mask_extraction', {}).get('min_pix_size', 2)
         
@@ -284,13 +284,13 @@ class HS_preprocessor:
         self.config['mask_extraction'] = {
             'pri_thr': pri_thr,
             'ndvi_thr': ndvi_thr,
-            'hbsi_thr': hbsi_thr,
+            'bndvi_thr': bndvi_thr,
             'min_pix_size': min_pix_size
         }
         
         # Calculate vegetation indices
         ndvi_image = (self.image[751] - self.image[670]) / (self.image[751] + self.image[670] + 1e-7)
-        hbsi_image = (self.image[470] - self.image[751]) / (self.image[470] + self.image[751] + 1e-7)
+        bndvi_image = (self.image[470] - self.image[751]) / (self.image[470] + self.image[751] + 1e-7)
         pri_image = (self.image[531] - self.image[570]) / (self.image[531] + self.image[570] + 1e-7)
         
         # Automatic outlier removal (inf, nan, and 5-sigma outliers)
@@ -335,12 +335,12 @@ class HS_preprocessor:
         
         # Clean all vegetation indices
         ndvi_image = clean_vi_outliers(ndvi_image, "NDVI")
-        hbsi_image = clean_vi_outliers(hbsi_image, "HBSI") 
+        bndvi_image = clean_vi_outliers(bndvi_image, "BNDVI") 
         pri_image = clean_vi_outliers(pri_image, "PRI")
         
         # Create masks after cleaning
         ndvi_mask = (ndvi_image > ndvi_thr)[:,:,np.newaxis]
-        hbsi_mask = (hbsi_image > hbsi_thr)[:,:,np.newaxis]
+        bndvi_mask = (bndvi_image > bndvi_thr)[:,:,np.newaxis]
         pri_mask = (pri_image < pri_thr)[:,:,np.newaxis]
 
         # Display all vegetation indices for calibration
@@ -356,9 +356,9 @@ class HS_preprocessor:
             axes[0,0].axis('off')
             plt.colorbar(im1, ax=axes[0,0], shrink=0.8)
             
-            # HBSI
-            im2 = axes[0,1].imshow(np.repeat(hbsi_image, repeat, axis=0), cmap='viridis')
-            axes[0,1].set_title(f"HBSI Image\n(Threshold: {hbsi_thr})")
+            # BNDVI
+            im2 = axes[0,1].imshow(np.repeat(bndvi_image, repeat, axis=0), cmap='viridis')
+            axes[0,1].set_title(f"BNDVI Image\n(Threshold: {bndvi_thr})")
             axes[0,1].axis('off')
             plt.colorbar(im2, ax=axes[0,1], shrink=0.8)
             
@@ -373,8 +373,8 @@ class HS_preprocessor:
             axes[1,0].set_title(f"NDVI mask\n(Threshold: {ndvi_thr})")
             axes[1,0].axis('off')
             
-            axes[1,1].imshow(np.repeat(hbsi_mask, repeat, axis=0))
-            axes[1,1].set_title(f"HBSI mask\n(Threshold: {hbsi_thr})")
+            axes[1,1].imshow(np.repeat(bndvi_mask, repeat, axis=0))
+            axes[1,1].set_title(f"BNDVI mask\n(Threshold: {bndvi_thr})")
             axes[1,1].axis('off')
             
             axes[1,2].imshow(np.repeat(pri_mask, repeat, axis=0))
@@ -384,7 +384,7 @@ class HS_preprocessor:
             plt.show()
 
         # Combine masks
-        mask = pri_mask.astype(bool) & ~ndvi_mask.astype(bool) & ~hbsi_mask.astype(bool)
+        mask = pri_mask.astype(bool) & ~ndvi_mask.astype(bool) & ~bndvi_mask.astype(bool)
         
         # Remove small objects - note that remove_small_objects expects and returns 2D boolean array
         mask_2d = remove_small_objects(mask[:,:,0], min_size=min_pix_size)
@@ -422,7 +422,7 @@ class HS_preprocessor:
             print(f" Mask extraction completed")
             print(f"  PRI threshold: {pri_thr}")
             print(f"  NDVI threshold: {ndvi_thr}")
-            print(f"  HBSI threshold: {hbsi_thr}")
+            print(f"  BNDVI threshold: {bndvi_thr}")
             print(f"  Min pixel size: {min_pix_size}")
             print(f"  Mask shape: {mask.shape}")
             mask_pixels = np.sum(mask)
@@ -571,7 +571,7 @@ class HS_preprocessor:
                 mask_params = pipeline_config.get('mask_extraction', {
                     'pri_thr': -0.1,
                     'ndvi_thr': 0.2,
-                    'hbsi_thr': -0.6,
+                    'bndvi_thr': -0.6,
                     'min_pix_size': 2
                 })
                 
@@ -763,7 +763,7 @@ class HS_preprocessor:
             'solar_correction': ['teflon_edge_coord', 'reference_teflon', 'smooth_window'],
             'spectral_smoothing': ['sigma', 'mode'],
             'normalization': ['to_wl', 'clip_to', 'method'],
-            'mask_extraction': ['pri_thr', 'ndvi_thr', 'hbsi_thr', 'min_pix_size', 'repeat', 'show']
+            'mask_extraction': ['pri_thr', 'ndvi_thr', 'bndvi_thr', 'min_pix_size', 'repeat', 'show']
         }
         
         # Define metadata parameters that are acceptable but filtered out during execution
@@ -1227,7 +1227,7 @@ class HS_preprocessor:
             'mask_extraction': {
                 'pri_thr': -0.1,  # PRI threshold for vegetation detection
                 'ndvi_thr': 0.2,  # NDVI threshold for vegetation detection
-                'hbsi_thr': -0.6,  # HBSI threshold for vegetation detection
+                'bndvi_thr': -0.6,  # BNDVI threshold for vegetation detection
                 'min_pix_size': 2  # Minimum object size in pixels
             }
         }
