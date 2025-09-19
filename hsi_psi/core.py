@@ -289,6 +289,38 @@ class HS_image:
         # Reshape back to the original image dimensions
         self.img = snv_image.reshape(self.img.shape)
 
+    def apply_rnv(self, eps=1e-8, nan_safe=True):
+        # Expect self.img shape (H, W, B)
+        img = self.img.astype(np.float32, copy=False)
+        flat = img.reshape(-1, img.shape[-1])  # (N_pixels, B)
+
+        med = (np.nanmedian if nan_safe else np.median)(flat, axis=1, keepdims=True)
+        mad = (np.nanmedian if nan_safe else np.median)(np.abs(flat - med), axis=1, keepdims=True)
+
+        # Scale MAD to be comparable to std under normality
+        mad_scaled = 1.4826 * mad
+        mad_safe = np.where(mad_scaled < eps, 1.0, mad_scaled)  # avoid divide-by-zero only where needed
+
+        rnv = (flat - med) / mad_safe
+        self.img = rnv.reshape(img.shape)
+
+    def apply_l2(self):
+        """
+        Applies L2 normalization to the entire hyperspectral image.
+        Each spectrum is scaled to have unit L2 norm (Euclidean norm).
+        """
+        # Reshape the image to (num_pixels, num_bands)
+        flat_img = self.img.reshape(-1, self.img.shape[-1])
+        
+        # Calculate L2 norm along the spectral axis
+        l2_norm = np.linalg.norm(flat_img, axis=1, keepdims=True)
+        
+        # Apply L2 normalization and handle zero norm
+        l2_image = flat_img / (l2_norm + self.epsilon)
+        
+        # Reshape back to the original image dimensions
+        self.img = l2_image.reshape(self.img.shape)
+
     def crop_spectral_range(self, wl_start=None, wl_end=None, band_start=None, band_end=None):
         """
         Crop the hyperspectral image to a specified spectral range.

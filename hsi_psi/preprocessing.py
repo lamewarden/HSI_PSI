@@ -1220,9 +1220,12 @@ class HS_preprocessor:
                 'replace': 'median'  # Replacement strategy: 'median' or 'mean'
             },
             'normalization': {
-                'method': 'to_wl',  # 'to_wl' for wavelength normalization, 'snv' for SNV
+                'method': 'to_wl',  # Normalization method: 'to_wl', 'snv', 'rnv', or 'l2'
                 'to_wl': 751,  # Wavelength for normalization (nm) - only used if method='to_wl'
                 'clip_to': 10  # Maximum normalized value - only used if method='to_wl'
+                # 'snv': Standard Normal Variate - centers and scales each spectrum using mean and std
+                # 'rnv': Robust Normal Variate - centers and scales using median and MAD (robust to outliers)
+                # 'l2': L2 normalization - scales each spectrum to unit Euclidean norm
             },
             'mask_extraction': {
                 'pri_thr': -0.1,  # PRI threshold for vegetation detection
@@ -1880,7 +1883,7 @@ class HS_preprocessor:
         return cleaned, mask
     
     def normalization(self, to_wl=751, clip_to=10, method="to_wl"):
-        """Step 6: Final normalization to specific wavelength or SNV normalization."""
+        """Step 6: Final normalization using different methods."""
         if self.image is None:
             raise ValueError("No image loaded.")
         
@@ -1918,6 +1921,76 @@ class HS_preprocessor:
                 if self.verbose:
                     print(f" Applied SNV normalization along spectral axis")
         
+        elif method == "rnv":
+            # Apply RNV (Robust Normal Variate) normalization along spectral axis
+            if hasattr(self.image, 'normalized') and self.image.normalized:
+                if self.verbose:
+                    print("Image already normalized. Skipping.")
+            else:
+                # Use HS_image's RNV method if available, otherwise implement here
+                if hasattr(self.image, 'apply_rnv'):
+                    self.image.apply_rnv()
+                else:
+                    # Implement RNV directly
+                    original_shape = self.image.img.shape
+                    # Reshape to 2D: (pixels, bands)
+                    reshaped_img = self.image.img.reshape(-1, original_shape[2])
+                    
+                    # Calculate median along spectral axis (axis=1)
+                    median_spectrum = np.median(reshaped_img, axis=1, keepdims=True)
+                    
+                    # Calculate MAD (Median Absolute Deviation) along spectral axis
+                    mad_spectrum = np.median(np.abs(reshaped_img - median_spectrum), axis=1, keepdims=True)
+                    
+                    # Apply RNV transformation with small epsilon to prevent division by zero
+                    # MAD is scaled by 1.4826 to make it comparable to standard deviation for normal distributions
+                    epsilon = 1e-7
+                    rnv_data = (reshaped_img - median_spectrum) / (1.4826 * mad_spectrum + epsilon)
+                    
+                    # Reshape back to original shape
+                    self.image.img = rnv_data.reshape(original_shape)
+                    
+                    # Clean up any remaining NaN or Inf values
+                    self.image.img[np.isnan(self.image.img)] = 0
+                    self.image.img[np.isinf(self.image.img)] = 0
+                
+                self.image.normalized = True
+                if self.verbose:
+                    print(f" Applied RNV normalization along spectral axis")
+        
+        elif method == "l2":
+            # Apply L2 normalization along spectral axis
+            if hasattr(self.image, 'normalized') and self.image.normalized:
+                if self.verbose:
+                    print("Image already normalized. Skipping.")
+            else:
+                # Use HS_image's L2 method if available, otherwise implement here
+                if hasattr(self.image, 'apply_l2'):
+                    self.image.apply_l2()
+                else:
+                    # Implement L2 directly
+                    original_shape = self.image.img.shape
+                    # Reshape to 2D: (pixels, bands)
+                    reshaped_img = self.image.img.reshape(-1, original_shape[2])
+                    
+                    # Calculate L2 norm along spectral axis (axis=1)
+                    l2_norm = np.linalg.norm(reshaped_img, axis=1, keepdims=True)
+                    
+                    # Apply L2 normalization with small epsilon to prevent division by zero
+                    epsilon = 1e-7
+                    l2_data = reshaped_img / (l2_norm + epsilon)
+                    
+                    # Reshape back to original shape
+                    self.image.img = l2_data.reshape(original_shape)
+                    
+                    # Clean up any remaining NaN or Inf values
+                    self.image.img[np.isnan(self.image.img)] = 0
+                    self.image.img[np.isinf(self.image.img)] = 0
+                
+                self.image.normalized = True
+                if self.verbose:
+                    print(f" Applied L2 normalization along spectral axis")
+        
         elif method == "to_wl":
             # Original wavelength-specific normalization
             if to_wl is None:
@@ -1934,7 +2007,7 @@ class HS_preprocessor:
                 print(f" Applied final normalization to {to_wl}nm (clip_to={clip_to})")
         
         else:
-            raise ValueError(f"Unknown normalization method: {method}. Use 'to_wl' or 'snv'")
+            raise ValueError(f"Unknown normalization method: {method}. Use 'to_wl', 'snv', 'rnv', or 'l2'")
         
         # Store config and results
         self.config['normalization'] = {
