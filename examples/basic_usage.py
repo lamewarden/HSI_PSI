@@ -1,5 +1,5 @@
 """
-Enhanced usage example for HSI_PSI package v0.2.0
+Enhanced usage example for HSI_PSI package v0.3.0
 
 This example demonstrates the new features including:
 1. Spectral range cropping capabilities
@@ -7,10 +7,12 @@ This example demonstrates the new features including:
 3. Noise analysis functions
 4. Wavelength mapping for different sensor configurations
 5. Reference teflon library creation
+6. NEW: Dimensionality reduction with PCA and MNF transformers
 """
 
 import hsi_psi
 from hsi_psi import HS_image, HS_preprocessor, get_rgb_sample
+from hsi_psi.dim_red import transformer
 from hsi_psi.utils import rank_noisy_bands, summarize_noisiest_bands, create_config_template
 
 def basic_example():
