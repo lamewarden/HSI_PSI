@@ -1543,18 +1543,17 @@ class HS_preprocessor:
         # Get calibration matrices
         if white_ref_path is not None:
             white_matrix, dark_matrix = self._upload_calibration(dark_calibration=dark_calibration, white_ref_path=white_ref_path)
+            # Apply calibration: (raw - dark) / (white - dark)
+            self.image.img = np.clip((self.image.img - dark_matrix) / (white_matrix - dark_matrix), 0, clip_to)
         else:
             try:
-                self.image.calibrate()
+                self.image.calibrate(clip_to=clip_to)
             except Exception as e:
-                raise RuntimeError(f"Sensor calibration failed: {str(e)}")
-        
-        # Apply calibration: (raw - dark) / (white - dark)
-        self.image.img = np.clip((self.image.img - dark_matrix) / (white_matrix - dark_matrix), 0, clip_to)
-        
+                raise RuntimeError(f"WHite calibration was not found!: {str(e)}")
+     
         # Clean up NaN and Inf values
         self.image.img[np.isnan(self.image.img)] = 0
-        self.image.img[np.isinf(self.image.img)] = clip_to
+        self.image.img[np.isinf(self.image.img)] = 0
         self.image.calibrated = True
         
         # Store config and results
