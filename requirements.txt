@@ -14,6 +14,7 @@ opencv-python>=4.5.0
 
 # Hyperspectral specific
 spectral>=0.22.0
+pysptools>=0.15.0        # MNF and other hyperspectral tools
 
 # Optional but recommended
 seaborn>=0.11.0          # Enhanced plotting
