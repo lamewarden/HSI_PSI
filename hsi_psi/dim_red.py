@@ -46,6 +46,9 @@ class transformer:
         elif self.method == 'mnf':
             self.mnf_obj = None
             self.eigenvalues_ = None
+            self.mnf_training_data = None
+            self.mnf_fitted_result = None
+            self.mnf_transformation_matrix = None
     
 
     def HSI_to_X(self, HSI_image, drop_nulls=False):
@@ -111,11 +114,23 @@ class transformer:
             # Initialize and fit MNF using pysptools
             self.mnf_obj = MNF()
             
-            # Fit the MNF transformer
-            # PySptools MNF.apply() both fits and transforms the data
+            # Store original training data for consistent transformations
+            self.mnf_training_data = X.copy()
+            
+            # Fit and get the transformation result
             mnf_result = self.mnf_obj.apply(mnf_input)
             
-            # Store eigenvalues (signal-to-noise ratios) if available
+            # Extract transformation components from pysptools internals if available
+            if hasattr(self.mnf_obj, 'transformation_matrix'):
+                self.mnf_transformation_matrix = self.mnf_obj.transformation_matrix
+            elif hasattr(self.mnf_obj, 'eigenvectors'):
+                self.mnf_transformation_matrix = self.mnf_obj.eigenvectors
+            else:
+                # Fallback: store the result and use it for same-data transforms
+                self.mnf_fitted_result = mnf_result
+                self.mnf_transformation_matrix = None
+            
+            # Store eigenvalues (signal-to-noise ratios) if available  
             if hasattr(self.mnf_obj, 'eigenvalues'):
                 self.eigenvalues_ = self.mnf_obj.eigenvalues[:n_components]
             else:
@@ -146,15 +161,28 @@ class transformer:
             return self.transformer_obj.transform(X)
             
         elif self.method == 'mnf':
-            # PySptools MNF expects data in shape (height, width, bands)
             if self.original_shape is None:
                 raise RuntimeError("Must call HSI_to_X first to store original shape")
             
-            height, width, bands = self.original_shape[1], self.original_shape[2], self.original_shape[0]
-            mnf_input = X.T.reshape(height, width, bands)
-            
-            # Apply MNF transformation
-            mnf_result = self.mnf_obj.apply(mnf_input)
+            # Check if transforming the same data as training
+            if hasattr(self, 'mnf_training_data') and np.array_equal(X, self.mnf_training_data):
+                # Same data - use stored result if available
+                if hasattr(self, 'mnf_fitted_result'):
+                    mnf_result = self.mnf_fitted_result
+                else:
+                    # Re-apply to same data
+                    height, width, bands = self.original_shape[1], self.original_shape[2], self.original_shape[0]
+                    mnf_input = X.T.reshape(height, width, bands)
+                    mnf_result = self.mnf_obj.apply(mnf_input)
+            else:
+                # Different data - this is where the limitation shows
+                # For MNF with pysptools, we can only reliably transform the same data
+                # that was used for fitting due to API limitations
+                raise RuntimeError(
+                    "PySptools MNF cannot reliably transform different data than what was used for fitting. "
+                    "Use transform_only=False in HSI_to_transformed_img() to fit and transform new data, "
+                    "or use PCA method for better fit/transform separation."
+                )
             
             # Keep only the requested number of components and reshape back to 2D
             mnf_result_truncated = mnf_result[:, :, :self.n_components]
