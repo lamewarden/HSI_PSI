@@ -3,12 +3,8 @@ from .core import HS_image
 import numpy as np
 import copy
 
-try:
-    from pysptools.noise import MNF
-    PYSPTOOLS_AVAILABLE = True
-except ImportError:
-    PYSPTOOLS_AVAILABLE = False
-    from scipy import linalg
+from scipy import linalg
+from scipy.ndimage import median_filter
 
 class transformer:
     """
@@ -29,12 +25,7 @@ class transformer:
         if self.method not in ['pca', 'mnf']:
             raise ValueError("Method must be 'pca' or 'mnf'")
         
-        # Check for MNF availability
-        if self.method == 'mnf' and not PYSPTOOLS_AVAILABLE:
-            raise ImportError(
-                "MNF requires pysptools library. Install with: pip install pysptools\n"
-                "Alternatively, use method='pca' for PCA-based dimensionality reduction."
-            )
+        # MNF is now implemented internally - no external dependencies needed
         
         self.fitted = False
         self.n_components = None
@@ -44,11 +35,11 @@ class transformer:
         if self.method == 'pca':
             self.transformer_obj = None
         elif self.method == 'mnf':
-            self.mnf_obj = None
+            self.mean_ = None
             self.eigenvalues_ = None
-            self.mnf_training_data = None
-            self.mnf_fitted_result = None
-            self.mnf_transformation_matrix = None
+            self.eigenvectors_ = None
+            self.noise_cov_ = None
+            self.signal_cov_ = None
     
 
     def HSI_to_X(self, HSI_image, drop_nulls=False):
@@ -85,6 +76,59 @@ class transformer:
         
         return array.reshape(self.original_shape[0], -1).T
 
+    def _estimate_noise_covariance(self, X):
+        """
+        Estimate noise covariance matrix using spatial differences method.
+        
+        Parameters:
+        -----------
+        X : numpy.ndarray
+            Input data matrix (n_pixels, n_bands)
+            
+        Returns:
+        --------
+        noise_cov : numpy.ndarray
+            Estimated noise covariance matrix (n_bands, n_bands)
+        """
+        if self.original_shape is None:
+            raise RuntimeError("Must call HSI_to_X first to store original shape")
+        
+        # Reshape to spatial format (height, width, bands)
+        height, width, bands = self.original_shape[1], self.original_shape[2], self.original_shape[0]
+        spatial_data = X.T.reshape(height, width, bands)
+        
+        # Calculate spatial differences to estimate noise
+        # Use differences in both horizontal and vertical directions
+        diff_data = []
+        
+        if height > 1:
+            # Vertical differences
+            diff_v = np.diff(spatial_data, axis=0)  # (height-1, width, bands)
+            diff_data.append(diff_v.reshape(-1, bands))
+        
+        if width > 1:
+            # Horizontal differences  
+            diff_h = np.diff(spatial_data, axis=1)  # (height, width-1, bands)
+            diff_data.append(diff_h.reshape(-1, bands))
+        
+        if not diff_data:
+            # Fallback for very small images
+            return np.eye(bands) * np.var(X, axis=0).mean() * 0.1
+        
+        # Combine all differences
+        all_diffs = np.vstack(diff_data)
+        
+        # Estimate noise covariance from differences
+        # Divide by 2 because differences amplify noise by sqrt(2)
+        noise_cov = np.cov(all_diffs.T) / 2.0
+        
+        # Regularize to ensure positive definiteness
+        eigenvals, eigenvecs = linalg.eigh(noise_cov)
+        eigenvals = np.maximum(eigenvals, 1e-10 * eigenvals.max())
+        noise_cov = eigenvecs @ np.diag(eigenvals) @ eigenvecs.T
+        
+        return noise_cov
+
     def fit(self, X, n_components):
         """
         Fit the transformer to the data.
@@ -103,40 +147,27 @@ class transformer:
             self.transformer_obj.fit(X)
             
         elif self.method == 'mnf':
-            # PySptools MNF expects data in shape (height, width, bands)
-            # Convert from (n_pixels, n_bands) to (height, width, bands)
-            if self.original_shape is None:
-                raise RuntimeError("Must call HSI_to_X first to store original shape")
+            # Custom MNF implementation using generalized eigenvalue decomposition
+            print(f"Fitting MNF with {n_components} components...")
             
-            height, width, bands = self.original_shape[1], self.original_shape[2], self.original_shape[0]
-            mnf_input = X.T.reshape(height, width, bands)
+            # Estimate signal and noise covariance matrices
+            signal_cov = np.cov(X.T)  # Signal covariance
+            noise_cov = self._estimate_noise_covariance(X)  # Noise covariance
             
-            # Initialize and fit MNF using pysptools
-            self.mnf_obj = MNF()
+            # Solve generalized eigenvalue problem: signal_cov * v = lambda * noise_cov * v
+            eigenvals, eigenvecs = linalg.eigh(signal_cov, noise_cov)
             
-            # Store original training data for consistent transformations
-            self.mnf_training_data = X.copy()
+            # Sort by eigenvalues in descending order (highest SNR first)
+            sort_idx = np.argsort(eigenvals)[::-1]
+            eigenvals = eigenvals[sort_idx]
+            eigenvecs = eigenvecs[:, sort_idx]
             
-            # Fit and get the transformation result
-            mnf_result = self.mnf_obj.apply(mnf_input)
+            # Store transformation components
+            self.mnf_components_ = eigenvecs[:, :n_components].copy()
+            self.eigenvalues_ = eigenvals[:n_components].copy()
             
-            # Extract transformation components from pysptools internals if available
-            if hasattr(self.mnf_obj, 'transformation_matrix'):
-                self.mnf_transformation_matrix = self.mnf_obj.transformation_matrix
-            elif hasattr(self.mnf_obj, 'eigenvectors'):
-                self.mnf_transformation_matrix = self.mnf_obj.eigenvectors
-            else:
-                # Fallback: store the result and use it for same-data transforms
-                self.mnf_fitted_result = mnf_result
-                self.mnf_transformation_matrix = None
-            
-            # Store eigenvalues (signal-to-noise ratios) if available  
-            if hasattr(self.mnf_obj, 'eigenvalues'):
-                self.eigenvalues_ = self.mnf_obj.eigenvalues[:n_components]
-            else:
-                # Fallback: compute from transformed data variance
-                mnf_flat = mnf_result.reshape(-1, mnf_result.shape[2])
-                self.eigenvalues_ = np.var(mnf_flat, axis=0)[:n_components]
+            # Store data statistics for inverse transform
+            self.mnf_mean_ = np.mean(X, axis=0)
         
         self.fitted = True
 
@@ -161,32 +192,14 @@ class transformer:
             return self.transformer_obj.transform(X)
             
         elif self.method == 'mnf':
-            if self.original_shape is None:
-                raise RuntimeError("Must call HSI_to_X first to store original shape")
+            # Apply MNF transformation using fitted components
+            # Center the data (subtract training mean)
+            X_centered = X - self.mnf_mean_
             
-            # Check if transforming the same data as training
-            if hasattr(self, 'mnf_training_data') and np.array_equal(X, self.mnf_training_data):
-                # Same data - use stored result if available
-                if hasattr(self, 'mnf_fitted_result'):
-                    mnf_result = self.mnf_fitted_result
-                else:
-                    # Re-apply to same data
-                    height, width, bands = self.original_shape[1], self.original_shape[2], self.original_shape[0]
-                    mnf_input = X.T.reshape(height, width, bands)
-                    mnf_result = self.mnf_obj.apply(mnf_input)
-            else:
-                # Different data - this is where the limitation shows
-                # For MNF with pysptools, we can only reliably transform the same data
-                # that was used for fitting due to API limitations
-                raise RuntimeError(
-                    "PySptools MNF cannot reliably transform different data than what was used for fitting. "
-                    "Use transform_only=False in HSI_to_transformed_img() to fit and transform new data, "
-                    "or use PCA method for better fit/transform separation."
-                )
+            # Apply transformation: X_transformed = X_centered @ components
+            X_transformed = X_centered @ self.mnf_components_
             
-            # Keep only the requested number of components and reshape back to 2D
-            mnf_result_truncated = mnf_result[:, :, :self.n_components]
-            return mnf_result_truncated.reshape(-1, self.n_components)
+            return X_transformed
     
     def fit_transform(self, X, n_components):
         """
@@ -319,29 +332,7 @@ class transformer:
         
         return info
     
-    @staticmethod
-    def check_dependencies():
-        """
-        Check availability of optional dependencies.
-        
-        Returns:
-        --------
-        info : dict
-            Dictionary with dependency availability information
-        """
-        deps = {
-            'pysptools': {
-                'available': PYSPTOOLS_AVAILABLE,
-                'required_for': ['MNF'],
-                'install_command': 'pip install pysptools'
-            }
-        }
-        
-        if not PYSPTOOLS_AVAILABLE:
-            print("Warning: pysptools not available. MNF functionality will be limited.")
-            print("Install with: pip install pysptools")
-        
-        return deps
+
 
 # Backward compatibility alias
 HS_PCA_transformer = transformer
