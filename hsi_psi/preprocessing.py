@@ -1541,7 +1541,13 @@ class HS_preprocessor:
             return self
         
         # Get calibration matrices
-        white_matrix, dark_matrix = self._upload_calibration(dark_calibration=dark_calibration, white_ref_path=white_ref_path)
+        if white_ref_path is not None:
+            white_matrix, dark_matrix = self._upload_calibration(dark_calibration=dark_calibration, white_ref_path=white_ref_path)
+        else:
+            try:
+                self.image.calibrate()
+            except Exception as e:
+                raise RuntimeError(f"Sensor calibration failed: {str(e)}")
         
         # Apply calibration: (raw - dark) / (white - dark)
         self.image.img = np.clip((self.image.img - dark_matrix) / (white_matrix - dark_matrix), 0, clip_to)
@@ -1883,7 +1889,7 @@ class HS_preprocessor:
         return cleaned, mask
     
     def normalization(self, to_wl=751, clip_to=10, method="to_wl"):
-        """Step 6: Final normalization using different methods."""
+
         if self.image is None:
             raise ValueError("No image loaded.")
         
