@@ -58,79 +58,191 @@ def get_hdr_images(folder: str, min_rows: int = 1, format: str = 'hdr') -> Dict[
     return all_images
 
 
-def get_rgb_sample(image: HS_image, normalize: bool = True, correct: bool = True,
-                  show: bool = True, title: str = "RGB Sample", repeat: int = 1,
-                  gamma: float = 0.8, axes: bool = False) -> np.ndarray:
+def get_rgb_sample(image: Union[HS_image, MS_image], normalize: bool = True, correct: bool = True,
+                   show: bool = True, title: str = 'RGB Sample', axes: bool = False,
+                   repeat: int = 1, verbose: bool = False):
     """
-    Extract RGB representation from hyperspectral image.
-    
-    Args:
-        image: HS_image object
-        normalize: Whether to normalize RGB values
-        correct: Whether to apply gamma correction
-        show: Whether to display the image
-        title: Title for the plot
-        repeat: Repeat factor for stretching
-        gamma: Gamma correction factor
-        axes: Whether to show axes
-        
-    Returns:
-        RGB array (height, width, 3)
-        
-    Example:
-        >>> rgb = get_rgb_sample(hs_image, show=True)
-        >>> print(f"RGB shape: {rgb.shape}")
+    Generate and optionally display an RGB representation for a single `HS_image` or `MS_image`.
+
+    Parameters
+    ----------
+    image : HS_image or MS_image
+        The image object to produce RGB from.
+    normalize : bool
+        Whether to perform traditional normalization for non-SNV data.
+    correct : bool
+        Remove obvious outliers and fix NaNs/Infs.
+    show : bool
+        Display the RGB image with matplotlib if True.
+    title : str
+        Plot title.
+    axes : bool
+        Whether to show axes in the matplotlib figure.
+    repeat : int
+        If >1, repeat the RGB sample along rows to make visualization larger.
+    verbose : bool
+        Print debug info when True.
+
+    Returns
+    -------
+    np.ndarray
+        RGB image array with shape (H, W, 3) or repeated along rows if `repeat` > 1.
     """
-    # Get RGB band indices (closest to 670nm, 560nm, 470nm)
-    r_idx, g_idx, b_idx = image.get_rgb_bands()
+    if image is None:
+        raise ValueError("No image provided.")
     
-    # Extract RGB bands
-    red_band = image.img[:, :, r_idx]
-    green_band = image.img[:, :, g_idx]
-    blue_band = image.img[:, :, b_idx]
-    
-    # Stack RGB bands
-    rgb_image = np.stack([red_band, green_band, blue_band], axis=2)
-    
-    # Handle SNV-normalized data (negative values)
-    has_negative = np.any(rgb_image < 0)
-    if has_negative:
-        # Shift and scale for SNV data
-        for i in range(3):
-            band = rgb_image[:, :, i]
-            band_min, band_max = np.percentile(band, [2, 98])
-            rgb_image[:, :, i] = np.clip((band - band_min) / (band_max - band_min), 0, 1)
+    # Check if image contains negative values (likely SNV-normalized)
+    has_negative_values = np.any(image.img < 0)
+    is_snv_normalized = hasattr(image, 'normalized') and image.normalized and has_negative_values
+        
+    # Extract RGB bands based on wavelength ranges
+    if len(image.ind) <= 6:
+        R = (image[670] / 4095)
+        G = (image[595] / 4095)
+        B = (image[495] / 4095)
+    elif np.mean(image.ind) < 900 and len(image.ind) > 6 and image.bits == 12 and image.calibrated == False:
+        R = np.mean([image[value] for value in image.ind if value >= 570 and value <= 650], axis=0)/4095
+        G = np.mean([image[value] for value in image.ind if value >= 520 and value <= 570], axis=0)/4095
+        B = np.mean([image[value] for value in image.ind if value >= 450 and value <= 520], axis=0)/4095
+    elif np.mean(image.ind) < 900 and len(image.ind) > 6 and image.bits == 12 and image.calibrated == True and not is_snv_normalized:
+        # Scaling to 95% of total reflectance (only for non-SNV data)
+        global_95 = np.percentile(image.img[1:-1, 20:-20, :], 95)
+        R = np.clip(np.mean([image[value] for value in image.ind if value >= 570 and value <= 650], axis=0)/global_95, 0, 1)
+        G = np.clip(np.mean([image[value] for value in image.ind if value >= 520 and value <= 570], axis=0)/global_95, 0, 1)
+        B = np.clip(np.mean([image[value] for value in image.ind if value >= 450 and value <= 520], axis=0)/global_95, 0, 1)
+    elif np.mean(image.ind) < 900 and len(image.ind) > 6 and image.bits == 12 and is_snv_normalized:
+        # Special handling for SNV-normalized data
+        R = np.mean([image[value] for value in image.ind if value >= 570 and value <= 650], axis=0)
+        G = np.mean([image[value] for value in image.ind if value >= 520 and value <= 570], axis=0)
+        B = np.mean([image[value] for value in image.ind if value >= 450 and value <= 520], axis=0)
+    elif np.mean(image.ind) > 900 and image.bits == 12:
+        R = np.mean([image[value] for value in image.ind if value >= 1000 and value <= 1100], axis=0)/4095
+        G = np.mean([image[value] for value in image.ind if value >= 1200 and value <= 1300], axis=0)/4095
+        B = np.mean([image[value] for value in image.ind if value >= 1400 and value <= 1500], axis=0)/4095
     else:
-        # Standard normalization for regular data
-        if normalize:
-            # Use percentile-based normalization for robustness
-            for i in range(3):
-                band = rgb_image[:, :, i]
-                band_max = np.percentile(band, 99)
-                if band_max > 0:
-                    rgb_image[:, :, i] = np.clip(band / band_max, 0, 1)
+        # Fallback for other cases
+        R = np.mean([image[value] for value in image.ind if value >= 570 and value <= 650], axis=0)
+        G = np.mean([image[value] for value in image.ind if value >= 520 and value <= 570], axis=0)
+        B = np.mean([image[value] for value in image.ind if value >= 450 and value <= 520], axis=0)
     
-    # Apply gamma correction if requested
-    if correct and gamma != 1.0:
-        rgb_image = np.power(rgb_image, gamma)
-    
-    # Repeat for stretching if needed
-    if repeat > 1:
-        rgb_image = np.repeat(rgb_image, repeat, axis=0)
-    
-    # Display if requested
-    if show:
-        plt.figure(figsize=(10, 6))
-        plt.imshow(rgb_image)
-        plt.title(title, fontsize=14, fontweight='bold')
+    if correct:
+        # Remove outliers only if the value is an outlier in all 3 channels
+        R_mean, R_std = np.mean(R), np.std(R)
+        G_mean, G_std = np.mean(G), np.std(G)
+        B_mean, B_std = np.mean(B), np.std(B)
+        outlier_mask = (
+            (np.abs(R - R_mean) > 4 * R_std) &
+            (np.abs(G - G_mean) > 4 * G_std) &
+            (np.abs(B - B_mean) > 4 * B_std)
+        )
+        R = np.where(outlier_mask, R_mean, R)
+        G = np.where(outlier_mask, G_mean, G)
+        B = np.where(outlier_mask, B_mean, B)
         
+        # Replace NaNs and Infs
+        R = np.nan_to_num(R, nan=np.nanmin(R))
+        G = np.nan_to_num(G, nan=np.nanmin(G))
+        B = np.nan_to_num(B, nan=np.nanmin(B))
+        
+        R = np.where(np.isinf(R), np.nanmax(R), R)
+        G = np.where(np.isinf(G), np.nanmax(G), G)
+        B = np.where(np.isinf(B), np.nanmax(B), B)
+    
+    # Handle normalization differently for SNV vs regular data
+    if is_snv_normalized:
+        # For SNV data: use percentile-based normalization to preserve contrast
+        if verbose:
+            print(f" RGB ranges before processing: R[{np.min(R):.3f}, {np.max(R):.3f}], G[{np.min(G):.3f}, {np.max(G):.3f}], B[{np.min(B):.3f}, {np.max(B):.3f}]")
+        
+        # Use robust percentile-based scaling to preserve contrast
+        # This prevents outliers from compressing the main data range
+        def robust_normalize(channel, low_percentile=2, high_percentile=98):
+            """Robust normalization using percentiles to preserve contrast."""
+            # Calculate percentiles to avoid outlier compression
+            low_val = np.percentile(channel, low_percentile)
+            high_val = np.percentile(channel, high_percentile)
+            
+            if high_val > low_val:
+                # Scale to [0, 1] based on percentile range
+                normalized = (channel - low_val) / (high_val - low_val)
+                # Clip to [0, 1] but preserve relative intensities
+                normalized = np.clip(normalized, 0, 1)
+            else:
+                # If no variation, set to middle gray
+                normalized = np.full_like(channel, 0.5)
+            
+            return normalized
+        
+        # Apply robust normalization to each channel independently
+        R = robust_normalize(R)
+        G = robust_normalize(G)
+        B = robust_normalize(B)
+        
+        # Enhance contrast further by stretching the histogram
+        def enhance_contrast(channel, gamma=0.8):
+            """Apply gamma correction to enhance contrast."""
+            return np.power(channel, gamma)
+        
+        R = enhance_contrast(R)
+        G = enhance_contrast(G)
+        B = enhance_contrast(B)
+            
+        if verbose:
+            print(f"   Applied robust normalization: R[{np.min(R):.3f}, {np.max(R):.3f}], G[{np.min(G):.3f}, {np.max(G):.3f}], B[{np.min(B):.3f}, {np.max(B):.3f}]")
+    
+    elif normalize:
+        # Traditional normalization for non-SNV data
+        # Only use interior region for normalization to avoid edge effects
+        try:
+            R_norm_val = np.max(R.squeeze()[5:-5, 20:-20])
+            G_norm_val = np.max(G.squeeze()[5:-5, 20:-20])
+            B_norm_val = np.max(B.squeeze()[5:-5, 20:-20])
+            
+            if R_norm_val > 0:
+                R = R / R_norm_val
+            if G_norm_val > 0:
+                G = G / G_norm_val
+            if B_norm_val > 0:
+                B = B / B_norm_val
+        except (IndexError, ValueError):
+            # Fallback if slicing fails
+            R_max, G_max, B_max = np.max(R), np.max(G), np.max(B)
+            if R_max > 0: R = R / R_max
+            if G_max > 0: G = G / G_max
+            if B_max > 0: B = B / B_max
+    
+    # Final clipping to ensure valid RGB range [0, 1]
+    R = np.clip(R, 0, 1)
+    G = np.clip(G, 0, 1)
+    B = np.clip(B, 0, 1)
+    
+    # Create RGB sample
+    rgb_sample = np.dstack((R, G, B))
+
+    if repeat > 1:
+        # Repeat the RGB channels to match the original image shape
+        # Ensure rgb_sample is at least 3D
+        if rgb_sample.ndim == 2:
+            rgb_sample = rgb_sample[:, :, np.newaxis]
+        # Repeat along axis=0 (rows)
+        rgb_sample = np.repeat(rgb_sample, repeat, axis=0)
+    
+    if show:
+        plt.figure(figsize=(8, 6))
+        plt.imshow(rgb_sample)
+        
+        # Enhanced title with processing info
+        if is_snv_normalized:
+            enhanced_title = f"{title} (SNV-normalized)"
+        else:
+            enhanced_title = title
+        
+        plt.title(enhanced_title)
         if not axes:
             plt.axis('off')
-        
-        plt.tight_layout()
         plt.show()
     
-    return rgb_image
+    return rgb_sample
 
 
 def extract_masks_from_hs_image(hs_image: HS_image, pri_thr: float = -0.1,
