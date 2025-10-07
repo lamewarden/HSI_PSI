@@ -428,9 +428,10 @@ class HS_image:
 
 
 class MS_image(HS_image):
-    def __init__(self, data_path=None):
+    def __init__(self, data_path=None, map_channels={0:755, 1:850, 2:420, 3:495, 4:670, 5:595}):
         super().__init__(data_path)
         self.devignet_counter = 0
+        self.map_channels(map_channels)
 
 
     def map_channels(self, target_wavelengths):
