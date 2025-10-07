@@ -433,6 +433,48 @@ class MS_image(HS_image):
         self.devignet_counter = 0
 
 
+    def map_channels(self, target_wavelengths):
+            """
+            Set channel wavelength mapping.
+    
+            Accepts:
+             - list/tuple/np.ndarray of wavelengths -> preserves order
+             - dict mapping band_index -> wavelength -> entries sorted by band_index
+             - dict mapping any keys -> wavelength -> preserves insertion order (fallback)
+    
+            After mapping updates:
+             - self.ind (list of int wavelengths)
+             - self.bands
+             - meta['wavelength'] if present (ENVI style, trailing empty string kept)
+            """
+            # If dict, try to interpret keys as band indices and sort by key
+            if isinstance(target_wavelengths, dict):
+                try:
+                    # try numeric keys -> sort by index
+                    items = sorted(target_wavelengths.items(), key=lambda kv: int(kv[0]))
+                    wl_list = [float(v) for _, v in items]
+                except Exception:
+                    # fallback: keep dict value order (Python 3.7+ preserves insertion order)
+                    wl_list = [float(v) for v in target_wavelengths.values()]
+            elif hasattr(target_wavelengths, '__iter__'):
+                wl_list = [float(x) for x in target_wavelengths]
+            else:
+                raise TypeError("target_wavelengths must be list/array or dict")
+    
+            # normalize to ints if your code expects ints (keep floats if needed)
+            self.ind = [int(round(w)) for w in wl_list]
+    
+            # update dependent attributes
+            self.bands = len(self.ind)
+            if hasattr(self, 'meta') and isinstance(self.meta, dict):
+                try:
+                    self.meta['wavelength'] = [str(w) for w in self.ind] + ['']
+                    self.meta['bands'] = str(self.bands)
+                except Exception:
+                    pass
+            return self
+
+
     def devignet(self, ref_HS, sigma=10, deblack=False, black_noise=0.0586):
     # Extracting de-vignetting matrix from ref images:
     # Gaussian blur application
