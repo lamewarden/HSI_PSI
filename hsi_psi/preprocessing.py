@@ -1573,6 +1573,7 @@ class HS_preprocessor:
         return self
     
     def solar_correction(self, teflon_edge_coord=(-10, -3), reference_teflon=None, smooth_window=35):
+        ### To-DO: make it fully ELM compatible  (empirical line method)
         """Step 4: Solar spectrum correction using side teflon panel."""
         if self.image is None:
             raise ValueError("No image loaded.")
