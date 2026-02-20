@@ -12,7 +12,7 @@ import glob
 import pandas as pd
 
 # Import from local modules using relative imports
-from .core import HS_image
+from .core import HS_image, MS_image
 
 warnings.filterwarnings("ignore")
 
@@ -58,8 +58,14 @@ class HS_preprocessor:
     - Integrated mask extraction with configurable parameters
     """
     
-    def __init__(self, image_path=None, verbose=True):
-        """Initialize with optional image path and verbose control."""
+    def __init__(self, image_path=None, verbose=True, map_channels=None):
+        """Initialize with optional image path and verbose control.
+        
+        Args:
+            image_path (str, optional): Path to hyperspectral image file
+            verbose (bool): Enable detailed logging output
+            map_channels (dict|list|array, optional): Channel mapping for 6-channel MS images
+        """
         self.image_path = image_path
         self.image = None
         self.original_image = None
@@ -77,15 +83,46 @@ class HS_preprocessor:
         self.execution_params = {}  # Parameters used for each executed step
         
         if image_path:
-            self.load_image(image_path)
+            self.load_image(image_path, map_channels=map_channels)
     
-    def load_image(self, image_path):
-        """Step 1: Load hyperspectral image."""
+    def load_image(self, image_path, map_channels=None):
+        """Step 1: Load hyperspectral image.
+        
+        Automatically detects 6-channel multispectral images and loads them as MS_image.
+        For other channel counts, loads as standard HS_image.
+        
+        Args:
+            image_path (str): Path to the image header file (.hdr)
+            map_channels (dict|list|array, optional): Channel-to-wavelength mapping for MS images.
+                Only used if image has 6 channels. If None and image has 6 channels,
+                uses default mapping: {0:755, 1:850, 2:420, 3:495, 4:670, 5:595}
+        
+        Returns:
+            self: HS_preprocessor instance for method chaining
+        """
         self.image_path = image_path
-        self.image = HS_image(image_path)
+        
+        # First, load temporarily to check channel count
+        temp_img = HS_image(image_path)
+        
+        # Check if this is a 6-channel multispectral image
+        if temp_img.bands == 6:
+            # Load as MS_image with optional channel mapping
+            if map_channels is None:
+                # Use default MS_image channel mapping
+                map_channels = {0:755, 1:850, 2:420, 3:495, 4:670, 5:595}
+            self.image = MS_image(image_path, map_channels=map_channels)
+            if self.verbose:
+                print(f" Loaded 6-channel MS image: {os.path.basename(image_path)}")
+                print(f"  Channel mapping: {dict(zip(range(6), self.image.ind))}")
+        else:
+            # Standard hyperspectral image
+            self.image = temp_img
+            if self.verbose:
+                print(f" Loaded HS image: {os.path.basename(image_path)}")
+        
         self.original_image = copy.deepcopy(self.image)
         if self.verbose:
-            print(f" Loaded image: {os.path.basename(image_path)}")
             print(f"  Shape: {self.image.img.shape}")
             print(f"  Wavelength range: {min(self.image.ind)}-{max(self.image.ind)} nm")
         return self
@@ -1241,7 +1278,7 @@ class HS_preprocessor:
     @staticmethod
     def process_folder(folder_path, white_ref_path=None, reference_teflon=None, 
                       config=None, config_path=None, pattern="*Data.hdr", verbose=True,
-                      extract_masks=True, return_df=False):
+                      extract_masks=True, return_df=False, map_channels=None):
         """
         Process all hyperspectral images in a folder with integrated mask extraction.
         
@@ -1256,6 +1293,8 @@ class HS_preprocessor:
             extract_masks (bool): Whether to extract masks as final step
             return_df (bool): If True, return concatenated DataFrame instead of images dict.
                              This processes images one by one to avoid memory overflow.
+            map_channels (dict|list|array, optional): Channel mapping for 6-channel MS images.
+                If None and images have 6 channels, uses default MS_image mapping.
             
         Returns:
             dict or pd.DataFrame: 
@@ -1438,7 +1477,7 @@ class HS_preprocessor:
                         print(f"\nProcessing: {filename}")
                     
                     # Create processor and run pipeline (inherit verbose setting)
-                    processor = HS_preprocessor(img_path, verbose=verbose)
+                    processor = HS_preprocessor(img_path, verbose=verbose, map_channels=map_channels)
                     
                     # Set the processor's config from the loaded/provided configuration
                     if final_config is not None:
