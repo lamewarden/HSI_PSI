@@ -16,8 +16,30 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 # some primitive class to read data
 class HS_image:
+    """Base class for hyperspectral image data.
+    
+    Encapsulates a hyperspectral image with all associated metadata, providing
+    core functionality for loading ENVI format images and accessing spectral data.
+    
+    Attributes:
+        img (np.ndarray): 3D array containing hyperspectral data [rows, columns, bands]
+        meta (dict): Metadata from ENVI header file (dimensions, data type, etc.)
+        ind (list): Wavelength values (nm) corresponding to each spectral band
+        name (str): Original filename of the hyperspectral image
+        rows (int): Number of rows in the image
+        cols (int): Number of columns in the image
+        bands (int): Number of spectral bands
+        bits (int): Data type bit depth
+        normalized (bool): Whether the image has been normalized
+        calibrated (bool): Whether sensor calibration has been applied
+    """
     epsilon = 1e-7
     def __init__(self, data_path):
+        """Initialize HS_image by loading hyperspectral data from file.
+        
+        Args:
+            data_path (str): Path to the hyperspectral image header file (.hdr)
+        """
         self.data_path = data_path
         self.read_hdr(data_path)
 
@@ -428,7 +450,30 @@ class HS_image:
 
 
 class MS_image(HS_image):
+    """Multispectral image class extending HS_image with channel mapping capabilities.
+    
+    This class is designed for multispectral cameras with fixed wavelength channels.
+    It allows custom wavelength mapping and includes vignetting correction functionality.
+    
+    Attributes:
+        Inherits all attributes from HS_image, plus:
+        devignet_counter (int): Counter for de-vignetting operations
+    """
     def __init__(self, data_path=None, map_channels={0:755, 1:850, 2:420, 3:495, 4:670, 5:595}):
+        """Initialize MS_image with custom channel-to-wavelength mapping.
+        
+        Args:
+            data_path (str, optional): Path to the multispectral image header file (.hdr).
+                If None, creates an empty MS_image object. Default: None.
+            map_channels (dict|list|array, optional): Channel to wavelength mapping.
+                - dict: Maps band indices to wavelengths {0: 755, 1: 850, ...}
+                - list/array: Wavelengths in channel order [755, 850, 420, ...]
+                Default: {0:755, 1:850, 2:420, 3:495, 4:670, 5:595}
+        
+        Example:
+            >>> img = hs.MS_image('data.hdr', map_channels={0:755, 1:850})
+            >>> img = hs.MS_image('data.hdr', map_channels=[755, 850, 420])
+        """
         super().__init__(data_path)
         self.devignet_counter = 0
         self.map_channels(map_channels)
