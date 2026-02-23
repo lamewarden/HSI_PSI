@@ -79,6 +79,14 @@ except ImportError:
     _ANNOTATION_AVAILABLE = False
     NapariHS_Annotator = None
 
+# Import segmentation tools (optional dependency)
+try:
+    from .segmentation import SpectralSegmenter
+    _SEGMENTATION_AVAILABLE = True
+except ImportError:
+    _SEGMENTATION_AVAILABLE = False
+    SpectralSegmenter = None
+
 # Version info
 __version__ = "0.4.0"
 __author__ = "Ivan Kashkan, HSI_PSI Development Team"
@@ -97,6 +105,9 @@ __all__ = [
     
     # Annotation tools (requires napari)
     "NapariHS_Annotator",
+    
+    # Segmentation tools (requires scikit-learn, optuna)
+    "SpectralSegmenter",
     
     # Utility functions
     "get_hdr_images",
