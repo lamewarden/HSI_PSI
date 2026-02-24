@@ -20,6 +20,7 @@ Example:
 
 import numpy as np
 import json
+import pickle
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 from datetime import datetime
@@ -425,133 +426,118 @@ class NapariHS_Annotator:
             
             return all_combined
     
-    def save_masks(self, output_dir: str, prefix: str = 'annotation'):
+    def save_masks(self, filepath: str):
         """
-        Save annotation masks to disk for all images.
+        Save all annotation masks to a single pickle file.
         
-        The masks are automatically de-repeated to match the original image dimensions.
-        For each image, saves:
-            - Combined mask as .npy file
-            - Individual class masks as .npy and .png files
-            - Metadata as .json file
+        Saves all masks for all images, automatically de-repeated to original dimensions.
         
         Parameters:
-            output_dir: str
-                Directory to save masks
-            prefix: str
-                Prefix for saved files
+            filepath: str
+                Path to save the pickle file (e.g., 'masks.pkl')
+                If directory is provided, creates 'annotations.pkl' in that directory
         """
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
+        filepath = Path(filepath)
+        
+        # If filepath is a directory, create default filename
+        if filepath.is_dir() or not filepath.suffix:
+            filepath.mkdir(parents=True, exist_ok=True)
+            filepath = filepath / 'annotations.pkl'
+        else:
+            filepath.parent.mkdir(parents=True, exist_ok=True)
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         
-        # Save masks for each image
-        for img_idx, image in enumerate(self.images):
-            image_name = getattr(image, 'name', f'Image_{img_idx}').replace('.hdr', '')
-            
-            print(f"\n{'='*70}")
-            print(f"💾 Saving masks for: {image_name}")
-            print(f"{'='*70}")
-            
-            # Save combined mask as numpy array (de-repeated to original size)
-            combined = self.get_combined_mask(original_size=True, image_idx=img_idx)
-            combined_path = output_path / f'{prefix}_{image_name}_combined_{timestamp}.npy'
-            np.save(combined_path, combined)
-            print(f"✅ Combined mask saved: {combined_path.name}")
-            print(f"   Shape: {combined.shape} (original image dimensions)")
-            
-            # Save individual class masks (de-repeated to original size)
-            masks = self.get_masks(original_size=True, image_idx=img_idx)
-            for class_name, mask in masks.items():
-                # Numpy array
-                mask_path = output_path / f'{prefix}_{image_name}_{class_name}_{timestamp}.npy'
-                np.save(mask_path, mask)
-                
-                # PNG for visualization
-                import matplotlib.pyplot as plt
-                png_path = output_path / f'{prefix}_{image_name}_{class_name}_{timestamp}.png'
-                plt.imsave(png_path, mask, cmap='gray')
-                
-                pixel_count = mask.sum()
-                percentage = (pixel_count / mask.size) * 100
-                print(f"   • {class_name}: {pixel_count} pixels ({percentage:.2f}%) → {mask_path.name}")
-            
-            # Save metadata for this image
-            orig_h, orig_w = self.original_dims[img_idx]
-            metadata = {
-                'image_name': image_name,
-                'image_index': img_idx,
+        # Collect all data to save
+        data = {
+            'masks': {},  # {img_idx: {class_name: mask}}
+            'combined_masks': {},  # {img_idx: combined_mask}
+            'metadata': {
                 'classes': self.classes,
                 'colors': [color for color in self.colors],
-                'shape': combined.shape,
-                'original_shape': (orig_h, orig_w),
                 'timestamp': timestamp,
                 'repeat': self.repeat,
-                'total_annotated_pixels': int(np.sum(combined > 0))
+                'num_images': len(self.images),
+                'image_names': [],
+                'original_shapes': []
             }
-            metadata_path = output_path / f'{prefix}_{image_name}_metadata_{timestamp}.json'
-            with open(metadata_path, 'w') as f:
-                json.dump(metadata, f, indent=4)
-            
-            print(f"✅ Metadata saved: {metadata_path.name}")
-            print(f"📊 Total annotated pixels: {metadata['total_annotated_pixels']} / {combined.size}")
-            print(f"    Coverage: {(metadata['total_annotated_pixels'] / combined.size * 100):.2f}%")
-            if self.repeat > 1:
-                print(f"📏 Masks de-repeated from {self.rgb_images[img_idx].shape[:2]} to {combined.shape}")
+        }
         
+        # Collect masks for each image
+        for img_idx, image in enumerate(self.images):
+            image_name = getattr(image, 'name', f'Image_{img_idx}').replace('.hdr', '')
+            data['metadata']['image_names'].append(image_name)
+            data['metadata']['original_shapes'].append(self.original_dims[img_idx])
+            
+            # Get de-repeated masks
+            data['masks'][img_idx] = self.get_masks(original_size=True, image_idx=img_idx)
+            data['combined_masks'][img_idx] = self.get_combined_mask(original_size=True, image_idx=img_idx)
+        
+        # Save to pickle
+        with open(filepath, 'wb') as f:
+            pickle.dump(data, f)
+        
+        # Print summary
         print(f"\n{'='*70}")
-        print(f"✅ All masks saved to: {output_path}")
+        print(f"💾 Masks saved to: {filepath}")
+        print(f"{'='*70}")
+        print(f"📊 Summary:")
+        print(f"   Images: {len(self.images)}")
+        print(f"   Classes: {', '.join(self.classes)}")
+        for img_idx, image_name in enumerate(data['metadata']['image_names']):
+            combined = data['combined_masks'][img_idx]
+            total_pixels = int(np.sum(combined > 0))
+            coverage = (total_pixels / combined.size * 100) if combined.size > 0 else 0
+            print(f"   • {image_name}: {total_pixels} pixels annotated ({coverage:.2f}%)")
         print(f"{'='*70}")
     
-    def load_masks(self, mask_paths: Union[str, List[str]]):
+    def load_masks(self, filepath: str):
         """
-        Load previously saved annotation masks.
+        Load previously saved annotation masks from a pickle file.
         
         Parameters:
-            mask_paths: Union[str, List[str]]
-                Path to the saved combined .npy mask file(s).
-                Can be a single path (for single image) or list of paths (for multiple images).
-                Number of paths must match number of images.
+            filepath: str
+                Path to the saved pickle file (e.g., 'masks.pkl' or 'annotations.pkl')
         """
-        # Convert single path to list for consistent handling
-        if isinstance(mask_paths, (str, Path)):
-            mask_paths = [mask_paths]
+        filepath = Path(filepath)
         
-        if len(mask_paths) != len(self.images):
-            raise ValueError(f"Number of mask paths ({len(mask_paths)}) must match number of images ({len(self.images)})")
+        # Load from pickle
+        with open(filepath, 'rb') as f:
+            data = pickle.load(f)
+        
+        # Validate data
+        if len(data['masks']) != len(self.images):
+            raise ValueError(f"Number of masks in file ({len(data['masks'])}) doesn't match number of images ({len(self.images)})")
         
         # Load masks for each image
-        for img_idx, mask_path in enumerate(mask_paths):
-            loaded_mask = np.load(mask_path)
+        for img_idx in range(len(self.images)):
+            loaded_masks = data['combined_masks'][img_idx]
             
             # The loaded mask is at original size, need to repeat if necessary
             expected_original_shape = self.original_dims[img_idx]
-            expected_display_shape = self.rgb_images[img_idx].shape[:2]
             
-            if loaded_mask.shape != expected_original_shape:
-                print(f"⚠️ Warning: Loaded mask shape {loaded_mask.shape} doesn't match original image shape {expected_original_shape}")
+            if loaded_masks.shape != expected_original_shape:
+                print(f"⚠️ Warning: Loaded mask shape {loaded_masks.shape} doesn't match original image shape {expected_original_shape}")
                 print("   Attempting to resize...")
                 from scipy.ndimage import zoom
                 zoom_factors = (
-                    expected_original_shape[0] / loaded_mask.shape[0], 
-                    expected_original_shape[1] / loaded_mask.shape[1]
+                    expected_original_shape[0] / loaded_masks.shape[0], 
+                    expected_original_shape[1] / loaded_masks.shape[1]
                 )
-                loaded_mask = zoom(loaded_mask, zoom_factors, order=0).astype(np.uint8)
+                loaded_masks = zoom(loaded_masks, zoom_factors, order=0).astype(np.uint8)
             
             # Repeat the loaded mask if necessary to match display size
             if self.repeat > 1:
-                loaded_mask = np.repeat(loaded_mask, self.repeat, axis=0)
+                loaded_masks = np.repeat(loaded_masks, self.repeat, axis=0)
             
             # Split combined mask into individual class masks for this image
             for i, class_name in enumerate(self.classes, start=1):
-                self.label_layers[img_idx][class_name] = (loaded_mask == i).astype(np.uint8)
-            
-            print(f"✅ Masks loaded for image {img_idx} from: {Path(mask_path).name}")
+                self.label_layers[img_idx][class_name] = (loaded_masks == i).astype(np.uint8)
         
         print(f"\n{'='*70}")
-        print(f"✅ All masks loaded successfully")
-        print(f"   Classes loaded: {', '.join(self.classes)}")
+        print(f"✅ Masks loaded from: {filepath}")
+        print(f"   Images: {len(data['masks'])}")
+        print(f"   Classes: {', '.join(self.classes)}")
         if self.repeat > 1:
             print(f"   Masks repeated {self.repeat}x to match display size")
         print(f"{'='*70}")

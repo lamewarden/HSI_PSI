@@ -441,6 +441,94 @@ class HS_image:
 
 
 
+    def visualize_mask(self, rgb_array=None, repeat=1, title='Segmentation Result'):
+        """
+        Visualize the mask overlay on RGB image.
+        
+        Args:
+            rgb_array (np.ndarray, optional): RGB image to use as background. If None, will be generated.
+            repeat (int): Vertical repetition factor for display
+            title (str): Figure title
+            
+        Returns:
+            None: Displays the visualization
+            
+        Raises:
+            ValueError: If mask is not set or empty
+        """
+        if not hasattr(self, 'mask') or self.mask is None:
+            raise ValueError("No mask available. Run extract_masks() first.")
+        
+        if self.mask.size == 0:
+            raise ValueError("Mask is empty.")
+        
+        # Import here to avoid circular imports
+        from hsi_psi.preprocessing import HS_preprocessor
+        
+        # Generate RGB if not provided
+        if rgb_array is None:
+            try:
+                rgb_array = HS_preprocessor.get_rgb_sample_from_image(
+                    self, normalize=True, correct=False, show=False, repeat=1
+                )
+            except Exception as e:
+                print(f"Failed to generate RGB: {e}")
+                return
+        
+        # Validate RGB
+        is_masked_array = np.ma.is_masked(rgb_array)
+        if is_masked_array:
+            all_masked = np.ma.getmask(rgb_array).all() if hasattr(np.ma.getmask(rgb_array), 'all') else False
+            if all_masked:
+                print("Warning: RGB image is fully masked, cannot visualize")
+                return
+            rgb_array = np.ma.filled(rgb_array, fill_value=0)
+        
+        if rgb_array.size == 0 or rgb_array.shape[0] == 0 or rgb_array.shape[1] == 0:
+            print("Warning: RGB image is empty, cannot visualize")
+            return
+        
+        try:
+            # Create figure
+            fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+            fig.suptitle(title, fontsize=16, fontweight='bold')
+            
+            # Original RGB
+            rgb_repeated = np.repeat(rgb_array, repeat, axis=0)
+            axes[0].imshow(rgb_repeated)
+            axes[0].set_title("Original RGB")
+            axes[0].axis('off')
+            
+            # Mask overlay
+            axes[1].imshow(rgb_repeated)
+            
+            # Create turquoise overlay for mask
+            mask_2d = self.mask[:, :, 0] if self.mask.ndim == 3 else self.mask
+            mask_repeated = np.repeat(mask_2d, repeat, axis=0)
+            
+            turquoise_overlay = np.full((mask_repeated.shape[0], mask_repeated.shape[1], 3), np.nan)
+            turquoise_overlay[mask_repeated == 1, 0] = 64/255
+            turquoise_overlay[mask_repeated == 1, 1] = 224/255
+            turquoise_overlay[mask_repeated == 1, 2] = 208/255
+            
+            axes[1].imshow(turquoise_overlay, alpha=0.6)
+            
+            # Calculate mask statistics
+            mask_pixels = np.sum(mask_2d)
+            total_pixels = mask_2d.shape[0] * mask_2d.shape[1]
+            percentage = 100 * mask_pixels / total_pixels if total_pixels > 0 else 0
+            
+            axes[1].set_title(f"Mask Overlay\n({mask_pixels}/{total_pixels} pixels = {percentage:.1f}%)")
+            axes[1].axis('off')
+            
+            plt.tight_layout()
+            plt.show()
+            
+        except Exception as e:
+            print(f"Visualization failed: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def flatten_to_df(self):
         """
         Flattenting whole HS image into 2D DF with separate pixels as rows and WL as columns.

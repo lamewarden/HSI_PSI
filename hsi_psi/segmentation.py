@@ -82,7 +82,7 @@ class SpectralSegmenter:
         training_data (pd.DataFrame): Combined training data with labels
     """
     
-    def __init__(self, verbose=True):
+    def __init__(self, verbose=False):
         """
         Initialize SpectralSegmenter.
         

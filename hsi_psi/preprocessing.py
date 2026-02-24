@@ -58,7 +58,7 @@ class HS_preprocessor:
     - Integrated mask extraction with configurable parameters
     """
     
-    def __init__(self, image_path=None, verbose=True, map_channels=None):
+    def __init__(self, image_path=None, verbose=False, map_channels=None):
         """Initialize with optional image path and verbose control.
         
         Args:
@@ -308,7 +308,7 @@ class HS_preprocessor:
   
     
     def extract_masks(self, pri_thr=None, ndvi_thr=None, hbsi_thr=None, min_pix_size=None, 
-                     model_path=None, repeat=10, show=True):
+                     model_path=None, repeat=1, show=True):
         """
         Step 7: Extract vegetation masks using either ML model or vegetation indices.
         
@@ -356,32 +356,6 @@ class HS_preprocessor:
             # Store mask as image attribute
             self.image.mask = mask.astype(np.uint8)
             
-            # Visualization
-            if show:
-                orig_rgb = self.get_rgb_sample(normalize=True, correct=False, show=False)
-                
-                fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-                fig.suptitle('ML Model Segmentation Result', fontsize=16, fontweight='bold')
-                
-                # Original RGB
-                axes[0].imshow(np.repeat(orig_rgb, repeat, axis=0))
-                axes[0].set_title("Original RGB")
-                axes[0].axis('off')
-                
-                # Segmentation result with overlay
-                axes[1].imshow(np.repeat(orig_rgb, repeat, axis=0))
-                mask_repeated = np.repeat(mask[:,:,0], repeat, axis=0)
-                turquoise_overlay = np.full((mask_repeated.shape[0], mask_repeated.shape[1], 3), np.nan)
-                turquoise_overlay[mask_repeated == 1, 0] = 64/255
-                turquoise_overlay[mask_repeated == 1, 1] = 224/255
-                turquoise_overlay[mask_repeated == 1, 2] = 208/255
-                axes[1].imshow(turquoise_overlay, alpha=0.6)
-                axes[1].set_title("ML Segmentation\n(Turquoise = Plant pixels)")
-                axes[1].axis('off')
-                
-                plt.tight_layout()
-                plt.show()
-            
             if self.verbose:
                 mask_pixels = np.sum(mask)
                 total_pixels = mask.shape[0] * mask.shape[1]
@@ -389,6 +363,14 @@ class HS_preprocessor:
                 print(f"  Model: {model_path}")
                 print(f"  Mask shape: {mask.shape}")
                 print(f"  Masked pixels: {mask_pixels}/{total_pixels} ({100*mask_pixels/total_pixels:.1f}%)")
+            
+            # Visualization moved to image.visualize_mask()
+            if show:
+                try:
+                    self.image.visualize_mask(repeat=repeat, title='ML Model Segmentation Result')
+                except Exception as e:
+                    if self.verbose:
+                        print(f"Note: Visualization skipped - {e}")
             
             # Store result
             self.step_results['mask_extraction'] = copy.deepcopy(self.image)
@@ -471,8 +453,6 @@ class HS_preprocessor:
 
         # Display all vegetation indices for calibration
         if show:
-            orig_rgb = self.get_rgb_sample(normalize=True, correct=False, show=False)
-            
             fig, axes = plt.subplots(2, 3, figsize=(18, 6))
             fig.suptitle('Vegetation Indices for Threshold Calibration', fontsize=16, fontweight='bold')
             
@@ -524,28 +504,16 @@ class HS_preprocessor:
         # Store result for visualization
         self.step_results['mask_extraction'] = copy.deepcopy(self.image)
         
+        # Visualization moved to image.visualize_mask()
         if show:
-            # Create visualization with proper transparency
-            plt.figure(figsize=(8, 4))
-            plt.imshow(np.repeat(orig_rgb[:,:,:], repeat, axis=0))
-            
-            # Create turquoise overlay only where mask == 1
-            mask_repeated = np.repeat(mask[:,:,0], repeat, axis=0)
-            turquoise_overlay = np.full((mask_repeated.shape[0], mask_repeated.shape[1], 3), np.nan)
-            
-            # Only set colors where mask is 1 (true transparency for mask == 0)
-            turquoise_overlay[mask_repeated == 1, 0] = 64/255    # Red
-            turquoise_overlay[mask_repeated == 1, 1] = 224/255   # Green  
-            turquoise_overlay[mask_repeated == 1, 2] = 208/255   # Blue
-            
-            plt.imshow(turquoise_overlay, alpha=0.6)
-        
-            plt.title("Final Segmentation Result\n(Turquoise = Plant pixels)", fontsize=14, fontweight='bold')    
-            plt.axis('off')
-            plt.show()
+            try:
+                self.image.visualize_mask(repeat=repeat, title='VI Threshold Segmentation Result')
+            except Exception as e:
+                if self.verbose:
+                    print(f"Note: Visualization skipped - {e}")
         
         if self.verbose:
-            print(f" Mask extraction completed")
+            print(f"✓ Mask extraction completed")
             print(f"  PRI threshold: {pri_thr}")
             print(f"  NDVI threshold: {ndvi_thr}")
             print(f"  HBSI threshold: {hbsi_thr}")
@@ -554,6 +522,15 @@ class HS_preprocessor:
             mask_pixels = np.sum(mask)
             total_pixels = mask.shape[0] * mask.shape[1]
             print(f"  Masked pixels: {mask_pixels}/{total_pixels} ({100*mask_pixels/total_pixels:.1f}%)")
+        
+        # Store config
+        self.config['mask_extraction'] = {
+            'method': 'thresholds',
+            'pri_thr': pri_thr,
+            'ndvi_thr': ndvi_thr,
+            'hbsi_thr': hbsi_thr,
+            'min_pix_size': min_pix_size
+        }
         
         return self
 
@@ -591,8 +568,7 @@ class HS_preprocessor:
     
     # === CONVENIENCE METHODS (updated with mask extraction) ===
     
-    def run_full_pipeline(self, config_override=None, extract_masks_flag=True, 
-                         apply_segmentation=False, save_segmentation_mask=False, 
+    def run_full_pipeline(self, config_override=None, apply_segmentation=True, 
                          segmentation_output_dir=None, show_segmentation=False):
         """
         Run the complete preprocessing pipeline using loaded configuration.
@@ -602,36 +578,42 @@ class HS_preprocessor:
         
         Args:
             config_override (dict, optional): Override specific parameters for any step.
-                                            Format: {'step_name': {'param': value}}
-            extract_masks_flag (bool): Whether to run mask extraction as final step
-            apply_segmentation (bool): Apply loaded segmentation model after preprocessing
-            save_segmentation_mask (bool): Save segmentation masks to disk
-            segmentation_output_dir (str, optional): Directory for segmentation masks (default: './output/')
-            show_segmentation (bool): Visualize segmentation results
+                                            Format: {'step_name': {'param': value'}}
+            apply_segmentation (bool): Whether to apply segmentation as final step.
+                                      Method (VI-based or ML-based) determined from config.
+                                      Default: True
+            segmentation_output_dir (str, optional): If provided, saves segmentation masks to this directory.
+                                                    If None, masks are not saved.
+            show_segmentation (bool): Visualize segmentation results with image/mask/overlay subplots.
+                                     Default: False
                                             
         Returns:
             self: For method chaining
             
         Examples:
-            # Basic pipeline with mask extraction
+            # Basic pipeline with VI-based segmentation (from config)
             processor.run_full_pipeline()
             
-            # Pipeline with ML segmentation
-            processor.load_segmentation_model('model.pkl')
+            # Pipeline with ML segmentation (config has method='ml_model')
             processor.run_full_pipeline(
                 apply_segmentation=True,
-                save_segmentation_mask=True,
                 show_segmentation=True
             )
             
-            # Config order determines execution order
-            config = {
-                'normalization': {...},      # This runs FIRST
-                'sensor_calibration': {...}, # This runs SECOND  
-                'solar_correction': {...}    # This runs THIRD
-            }
-            processor.config = config
-            processor.run_full_pipeline()
+            # Override segmentation method via config_override
+            processor.run_full_pipeline(
+                config_override={
+                    'mask_extraction': {
+                        'method': 'ml_model',
+                        'model_path': './models/my_model.pkl'
+                    }
+                },
+                segmentation_output_dir='./output/masks/',
+                show_segmentation=True
+            )
+            
+            # Skip segmentation entirely
+            processor.run_full_pipeline(apply_segmentation=False)
         """
         
         # Check if config is loaded
@@ -662,12 +644,16 @@ class HS_preprocessor:
             pipeline_steps.remove('mask_extraction')
         
         if self.verbose:
-            print(" Running config-driven preprocessing pipeline...")
-            print(f" Steps from config (in order): {pipeline_steps}")
-            if extract_masks_flag:
-                print(f" Final step: mask_extraction")
+            print("🚀 Running config-driven preprocessing pipeline...")
+            print(f"📋 Steps from config (in order): {pipeline_steps}")
             if apply_segmentation:
-                print(f" Post-processing: ML segmentation")
+                # Determine segmentation method from config
+                mask_config = pipeline_config.get('mask_extraction', {})
+                method = mask_config.get('method', 'thresholds')
+                if method == 'ml_model':
+                    print(f"🎯 Final step: mask_extraction (ML model)")
+                else:
+                    print(f"🎯 Final step: mask_extraction (vegetation indices)")
         
         # Validate that all steps in config are known processing steps
         known_steps = {'sensor_calibration', 'spike_removal', 'spectral_cropping', 
@@ -700,67 +686,103 @@ class HS_preprocessor:
                     traceback.print_exc()
                 raise RuntimeError(error_msg) from e
         
-        # Run mask extraction as final step if requested
-        if extract_masks_flag:
+        # Apply segmentation as final step if requested
+        if apply_segmentation:
             if self.verbose:
-                print(f" Final step: mask_extraction...")
+                print(f"🌿 Final step: mask_extraction...")
             
             try:
-                # Use mask extraction parameters from config, or defaults
-                mask_params = pipeline_config.get('mask_extraction', {
-                    'pri_thr': -0.1,
-                    'ndvi_thr': 0.2,
-                    'hbsi_thr': -0.6,
-                    'min_pix_size': 2
-                })
+                # Get mask extraction parameters from config (with overrides applied)
+                mask_config = pipeline_config.get('mask_extraction', {})
                 
-                # Don't show visualization in batch processing unless verbose
-                mask_params['show'] = self.verbose
+                # If no mask_extraction in config, use default threshold-based method
+                if not mask_config:
+                    if self.verbose:
+                        print(f"   ℹ️  No mask_extraction config found, using default vegetation indices")
+                    mask_config = {'method': 'thresholds'}
                 
+                # Determine method from config
+                method = mask_config.get('method', 'thresholds')
+                
+                if method == 'ml_model':
+                    # ML model-based segmentation
+                    model_path = mask_config.get('model_path')
+                    if model_path is None:
+                        raise ValueError("mask_extraction method='ml_model' requires 'model_path' in config")
+                    
+                    # Extract parameters for ML-based segmentation
+                    mask_params = {
+                        'model_path': model_path,
+                        'repeat': mask_config.get('repeat', 1),
+                        'show': False  # Will use visualize_results separately if show_segmentation=True
+                    }
+                    
+                    if self.verbose:
+                        print(f"   🤖 Using ML model: {model_path}")
+                    
+                else:
+                    # Threshold-based segmentation (vegetation indices)
+                    mask_params = {
+                        'pri_thr': mask_config.get('pri_thr', -0.1),
+                        'ndvi_thr': mask_config.get('ndvi_thr', 0.2),
+                        'hbsi_thr': mask_config.get('hbsi_thr', -0.6),
+                        'min_pix_size': mask_config.get('min_pix_size', 2),
+                        'repeat': mask_config.get('repeat', 1),
+                        'show': False  # Will show separately if show_segmentation=True
+                    }
+                    
+                    if self.verbose:
+                        print(f"   🌿 Using vegetation indices (PRI, NDVI, HBSI)")
+                
+                # Apply segmentation
                 self.extract_masks(**mask_params)
                 
+                # Save mask if output directory is provided
+                if segmentation_output_dir is not None:
+                    import os
+                    os.makedirs(segmentation_output_dir, exist_ok=True)
+                    
+                    # Generate output filename
+                    image_name = os.path.splitext(os.path.basename(self.image_path))[0]
+                    mask_path = os.path.join(segmentation_output_dir, f"{image_name}_mask.npy")
+                    
+                    # Save mask
+                    np.save(mask_path, self.image.mask)
+                    
+                    if self.verbose:
+                        print(f"💾 Mask saved to: {mask_path}")
+                
+                # Visualize results if requested
+                if show_segmentation:
+                    if self.verbose:
+                        print(f"📊 Visualizing segmentation results...")
+                    
+                    try:
+                        # Use visualize_mask method which shows RGB, mask, and overlay
+                        self.image.visualize_mask(
+                            repeat=mask_config.get('repeat', 1),
+                            title=f"Segmentation Results ({method})"
+                        )
+                    except Exception as e:
+                        if self.verbose:
+                            print(f"⚠️  Visualization failed: {e}")
+                
                 if self.verbose:
-                    print(f" Final step: mask_extraction completed")
+                    print(f"✅ Final step: mask_extraction completed")
                 
             except Exception as e:
                 error_msg = f"Error in mask extraction: {str(e)}"
                 if self.verbose:
-                    print(f" {error_msg}")
-                    import traceback
-                    traceback.print_exc()
-                raise RuntimeError(error_msg) from e
-        
-        # Apply ML segmentation if requested
-        if apply_segmentation:
-            if self.verbose:
-                print(f" Post-processing: applying ML segmentation...")
-            
-            try:
-                self.apply_segmentation(
-                    save_mask=save_segmentation_mask,
-                    output_dir=segmentation_output_dir,
-                    show=show_segmentation,
-                    verbose=self.verbose
-                )
-                
-                if self.verbose:
-                    print(f" Post-processing: ML segmentation completed")
-                
-            except Exception as e:
-                error_msg = f"Error in ML segmentation: {str(e)}"
-                if self.verbose:
-                    print(f" {error_msg}")
+                    print(f"❌ {error_msg}")
                     import traceback
                     traceback.print_exc()
                 raise RuntimeError(error_msg) from e
         
         if self.verbose:
-            total_steps = len(pipeline_steps) + (1 if extract_masks_flag else 0) + (1 if apply_segmentation else 0)
-            print(f" Pipeline completed successfully! ({total_steps} steps executed)")
-            if extract_masks_flag and hasattr(self.image, 'mask'):
-                print(f" Mask stored in image.mask attribute")
-            if apply_segmentation and self.segmentation_mask is not None:
-                print(f" Segmentation mask stored in image.segmentation_mask attribute")
+            total_steps = len(pipeline_steps) + (1 if apply_segmentation else 0)
+            print(f"✅ Pipeline completed successfully! ({total_steps} steps executed)")
+            if apply_segmentation and hasattr(self.image, 'mask'):
+                print(f"🎭 Mask stored in image.mask attribute")
             
         return self
     
@@ -1405,12 +1427,11 @@ class HS_preprocessor:
     
     @staticmethod
     def process_folder(folder_path, white_ref_path=None, reference_teflon=None, 
-                      config=None, config_path=None, pattern="*Data.hdr", verbose=True,
-                      extract_masks=True, return_df=False, map_channels=None,
-                      segmentation_model_path=None, save_segmentation_masks=False,
-                      segmentation_output_dir=None):
+                      config=None, config_path=None, pattern="*Data.hdr", verbose=False,
+                      apply_segmentation=True, return_df=False, map_channels=None,
+                      segmentation_output_dir=None, show_segmentation=False):
         """
-        Process all hyperspectral images in a folder with integrated mask extraction and optional ML segmentation.
+        Process all hyperspectral images in a folder with integrated segmentation.
         
         Args:
             folder_path (str): Path to folder containing images
@@ -1420,15 +1441,14 @@ class HS_preprocessor:
             config_path (str, optional): Path to config file to load (takes precedence over config)
             pattern (str): File pattern to match (default: "*Data.hdr")
             verbose (bool): Enable verbose output
-            extract_masks (bool): Whether to extract vegetation masks as final step
+            apply_segmentation (bool): Whether to apply segmentation as final step.
+                                      Method (VI-based or ML-based) determined from config. Default: True
             return_df (bool): If True, return concatenated DataFrame instead of images dict.
                              This processes images one by one to avoid memory overflow.
             map_channels (dict|list|array, optional): Channel mapping for 6-channel MS images.
                 If None and images have 6 channels, uses default MS_image mapping.
-            segmentation_model_path (str, optional): Path to trained SpectralSegmenter model (.pkl).
-                If provided, applies ML segmentation to all processed images.
-            save_segmentation_masks (bool): Save segmentation masks as .npy files (default: False)
-            segmentation_output_dir (str, optional): Directory for segmentation masks (default: './output/')
+            segmentation_output_dir (str, optional): If provided, saves segmentation masks to this directory.
+            show_segmentation (bool): Visualize segmentation results with image/mask/overlay. Default: False
             
         Returns:
             dict or pd.DataFrame: 
@@ -1436,16 +1456,23 @@ class HS_preprocessor:
                 - If return_df=True: Concatenated DataFrame with spectral data from all images
                 
         Examples:
-            # Basic batch processing
+            # Basic batch processing with VI-based segmentation
             results = HS_preprocessor.process_folder('data/samples/', config_path='config.json')
             
-            # Batch processing with ML segmentation
+            # Batch processing with ML segmentation (config has method='ml_model')
+            results = HS_preprocessor.process_folder(
+                'data/samples/',
+                config_path='config_with_ml.json',
+                apply_segmentation=True,
+                segmentation_output_dir='./output/masks/',
+                show_segmentation=False  # Don't show in batch mode
+            )
+            
+            # Skip segmentation entirely
             results = HS_preprocessor.process_folder(
                 'data/samples/',
                 config_path='config.json',
-                segmentation_model_path='models/best_model.pkl',
-                save_segmentation_masks=True,
-                segmentation_output_dir='output/segmentation/'
+                apply_segmentation=False
             )
         """
         # Load config from file if config_path is provided
@@ -1478,28 +1505,6 @@ class HS_preprocessor:
         # Use loaded config/reference if available, otherwise use provided parameters
         final_config = loaded_config if loaded_config is not None else config
         final_reference_teflon = loaded_reference_teflon if loaded_reference_teflon is not None else reference_teflon
-        
-        # Load segmentation model if provided
-        segmentation_model = None
-        if segmentation_model_path is not None:
-            try:
-                from .segmentation import SpectralSegmenter
-                if verbose:
-                    print(f"Loading segmentation model from: {segmentation_model_path}")
-                segmentation_model = SpectralSegmenter.load_model(segmentation_model_path, verbose=False)
-                if verbose:
-                    print(f"✓ Segmentation model loaded successfully")
-                    if hasattr(segmentation_model, 'best_model_name'):
-                        print(f"  Model type: {segmentation_model.best_model_name}")
-            except ImportError:
-                if verbose:
-                    print("Warning: SpectralSegmenter not available. Skipping segmentation.")
-                    print("Install dependencies: pip install optuna scikit-learn")
-                segmentation_model = None
-            except Exception as e:
-                if verbose:
-                    print(f"Warning: Could not load segmentation model: {str(e)}")
-                segmentation_model = None
         
         # Find all images
         image_paths = glob.glob(os.path.join(folder_path, pattern))
@@ -1561,35 +1566,20 @@ class HS_preprocessor:
                     if white_ref_path:
                         config_override['sensor_calibration'] = {'white_ref_path': white_ref_path}
                     
-                    processor.run_full_pipeline(config_override=config_override if config_override else None,
-                                              extract_masks_flag=extract_masks)
-                    
-                    # Apply ML segmentation if model is loaded
-                    if segmentation_model is not None:
-                        if verbose:
-                            print(f"Applying ML segmentation...")
-                        
-                        try:
-                            # Load the model into the processor
-                            processor.segmentation_model = segmentation_model
-                            
-                            # Apply segmentation
-                            processor.apply_segmentation(
-                                save_mask=save_segmentation_masks,
-                                output_dir=segmentation_output_dir if segmentation_output_dir else './output/',
-                                show=False,  # Don't show visualization in batch processing
-                                verbose=verbose
-                            )
-                        except Exception as e:
-                            if verbose:
-                                print(f"Warning: Segmentation failed for {filename}: {str(e)}")
+                    # Run full pipeline with segmentation
+                    processor.run_full_pipeline(
+                        config_override=config_override if config_override else None,
+                        apply_segmentation=apply_segmentation,
+                        segmentation_output_dir=segmentation_output_dir,
+                        show_segmentation=show_segmentation
+                    )
                     
                     # Get processed image
                     hs_image = processor.get_current_image()
                     
                     if verbose:
                         print(f"Completed: {filename}")
-                        if extract_masks and hasattr(hs_image, 'mask') and hs_image.mask is not None:
+                        if apply_segmentation and hasattr(hs_image, 'mask') and hs_image.mask is not None:
                             mask_pixels = np.sum(hs_image.mask)
                             total_pixels = hs_image.mask.shape[0] * hs_image.mask.shape[1]
                             print(f"Mask: {mask_pixels}/{total_pixels} pixels ({100*mask_pixels/total_pixels:.1f}%)")
@@ -1700,35 +1690,19 @@ class HS_preprocessor:
                     if white_ref_path:
                         config_override['sensor_calibration'] = {'white_ref_path': white_ref_path}
                     
-                    processor.run_full_pipeline(config_override=config_override if config_override else None,
-                                              extract_masks_flag=extract_masks)
-                    
-                    # Apply ML segmentation if model is loaded
-                    if segmentation_model is not None:
-                        if verbose:
-                            print(f"Applying ML segmentation...")
-                        
-                        try:
-                            # Load the model into the processor
-                            processor.segmentation_model = segmentation_model
-                            
-                            # Apply segmentation
-                            processor.apply_segmentation(
-                                save_mask=save_segmentation_masks,
-                                output_dir=segmentation_output_dir if segmentation_output_dir else './output/',
-                                show=False,  # Don't show visualization in batch processing
-                                verbose=verbose
-                            )
-                        except Exception as e:
-                            if verbose:
-                                print(f"Warning: Segmentation failed for {filename}: {str(e)}")
+                    processor.run_full_pipeline(
+                        config_override=config_override if config_override else None,
+                        apply_segmentation=apply_segmentation,
+                        segmentation_output_dir=segmentation_output_dir,
+                        show_segmentation=show_segmentation
+                    )
                     
                     # Store result
                     results[filename] = processor.get_current_image()
                     
                     if verbose:
                         print(f"Completed: {filename}")
-                        if extract_masks and hasattr(processor.image, 'mask'):
+                        if apply_segmentation and hasattr(processor.image, 'mask'):
                             mask_pixels = np.sum(processor.image.mask)
                             total_pixels = processor.image.mask.shape[0] * processor.image.mask.shape[1]
                             print(f"Mask: {mask_pixels}/{total_pixels} pixels ({100*mask_pixels/total_pixels:.1f}%)")
@@ -1741,12 +1715,9 @@ class HS_preprocessor:
             if verbose:
                 successful_results = [r for r in results.values() if r is not None]
                 print(f"\nProcessed {len(successful_results)}/{len(image_paths)} images successfully")
-                if extract_masks:
+                if apply_segmentation:
                     mask_count = sum(1 for r in successful_results if hasattr(r, 'mask') and r.mask is not None)
-                    print(f"Masks extracted for {mask_count}/{len(successful_results)} processed images")
-                if segmentation_model is not None:
-                    seg_count = sum(1 for r in successful_results if hasattr(r, 'segmentation_mask') and r.segmentation_mask is not None)
-                    print(f"ML segmentation applied to {seg_count}/{len(successful_results)} processed images")
+                    print(f"Segmentation applied to {mask_count}/{len(successful_results)} processed images")
             return results
     
     
@@ -1776,18 +1747,10 @@ class HS_preprocessor:
         
         use_verbose = verbose if verbose is not None else self.verbose
         
-        if use_verbose:
-            print(f"Loading segmentation model from: {model_path}")
-        
-        # Load the model using SpectralSegmenter's load_model method
-        self.segmentation_model = SpectralSegmenter.load_model(model_path, verbose=use_verbose)
-        
-        if use_verbose:
-            print(f"✓ Segmentation model loaded successfully")
-            if hasattr(self.segmentation_model, 'best_model_name'):
-                print(f"  Model type: {self.segmentation_model.best_model_name}")
-            if hasattr(self.segmentation_model, 'cv_score'):
-                print(f"  CV Score: {self.segmentation_model.cv_score:.4f}")
+        # Create SpectralSegmenter instance and load the model
+        # The SpectralSegmenter will handle verbose output during loading
+        self.segmentation_model = SpectralSegmenter(verbose=use_verbose)
+        self.segmentation_model.load_model(model_path)
         
         return self
     
@@ -1828,11 +1791,7 @@ class HS_preprocessor:
             print("Applying segmentation model to preprocessed image...")
         
         # Use the SpectralSegmenter's predict_image method
-        predicted_mask = self.segmentation_model.predict_image(
-            self.image,
-            show=show,
-            verbose=use_verbose
-        )
+        predicted_mask = self.segmentation_model.predict_image(self.image)
         
         # Store the mask
         self.segmentation_mask = predicted_mask
@@ -1844,10 +1803,17 @@ class HS_preprocessor:
             self.image.segmentation_mask = predicted_mask
         
         if use_verbose:
-            positive_pixels = np.sum(predicted_mask)
-            total_pixels = predicted_mask.shape[0] * predicted_mask.shape[1]
             print(f"✓ Segmentation completed")
-            print(f"  Positive pixels: {positive_pixels}/{total_pixels} ({100*positive_pixels/total_pixels:.1f}%)")
+            # Display class distribution from the segmenter (already printed by predict_image if verbose=True)
+        
+        # Visualize if requested
+        if show:
+            self.segmentation_model.visualize_results(
+                self.image,
+                predicted_mask,
+                show_rgb=True,
+                show_overlay=True
+            )
         
         # Save mask if requested
         if save_mask:
@@ -2655,7 +2621,7 @@ class HS_preprocessor:
     
     
     @staticmethod
-    def extract_masked_spectra_to_df(processed_images_dict, save_path=None, segmentation=False, verbose=True):
+    def extract_masked_spectra_to_df(processed_images_dict, save_path=None, segmentation=False, verbose=False, labels=None):
         """
         Extract pixel spectra from hyperspectral images into a DataFrame.
         
@@ -2673,8 +2639,12 @@ class HS_preprocessor:
             If given, save the resulting DataFrame to CSV at this path.
         segmentation : bool, optional (default False)
             If True, also extract spectra of non-masked pixels and label them as 'BG'.
-        verbose : bool, optional (default True)
+        verbose : bool, optional (default False)
             If True, print progress information.
+        labels : list, optional
+            List of label strings, one for each image in processed_images_dict.
+            If provided, these labels will be used instead of parsing filenames.
+            Length must match the number of images.
 
         Returns
         -------
@@ -2683,6 +2653,15 @@ class HS_preprocessor:
         """
         import time
         start_time = time.time()
+        
+        # Validate labels parameter
+        if labels is not None:
+            if len(labels) != len(processed_images_dict):
+                raise ValueError(
+                    f"labels list length ({len(labels)}) must match number of images ({len(processed_images_dict)})"
+                )
+            if verbose:
+                print(f" Using provided labels: {labels}")
         
         # Pre-allocate lists for efficiency
         all_spectra = []
@@ -2742,13 +2721,18 @@ class HS_preprocessor:
                     print(f"    Skipping: wavelengths length {len(hs_image.ind)} != bands {B}")
                 continue
 
-            # Generate label from name or filename
-            try:
-                base = hs_image.name if hasattr(hs_image, 'name') and hs_image.name else filename
-                parts = base.split("-")
-                label_fg = parts[2] if len(parts) > 2 else "FG"
-            except Exception:
-                label_fg = "FG"
+            # Generate label from provided list or parse from filename
+            if labels is not None:
+                # Use provided label
+                label_fg = labels[i]
+            else:
+                # Parse label from filename (legacy behavior)
+                try:
+                    base = hs_image.name if hasattr(hs_image, 'name') and hs_image.name else filename
+                    parts = base.split("-")
+                    label_fg = parts[2] if len(parts) > 2 else "FG"
+                except Exception:
+                    label_fg = "FG"
 
             # Extract foreground pixels - vectorized approach
             fg_indices = np.where(mask_2d)
@@ -2815,9 +2799,19 @@ class HS_preprocessor:
 
         if save_path is not None:
             if verbose:
-                print(f"Saving to {save_path}...")
-            df.to_csv(save_path, index=False)
+                save_start = time.time()
+                print(f" Saving to {save_path}...")
+            
+            # Use faster CSV writing for large datasets
+            # Try pyarrow engine first (much faster), fallback to default
+            try:
+                df.to_csv(save_path, index=False, engine='pyarrow')
+            except (ImportError, TypeError):
+                # Fallback: use default engine with optimizations
+                df.to_csv(save_path, index=False, chunksize=10000)
+            
             if verbose:
-                print(f" Saved successfully")
+                save_time = time.time() - save_start
+                print(f" Saved successfully in {save_time:.2f}s")
 
         return df
