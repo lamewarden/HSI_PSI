@@ -805,7 +805,11 @@ class HS_preprocessor:
             
             # Auto-detect calibration files if not provided
             if (white_ref_path is None or dark_calibration is None) and hasattr(self, 'image_path') and self.image_path:
-                auto_white, auto_dark = HS_preprocessor._find_calibration_files(self.image_path)
+                auto_white, auto_dark = HS_preprocessor._find_calibration_files(
+                    self.image_path,
+                    need_white=(white_ref_path is None),
+                    need_dark=(dark_calibration is None)
+                )
                 
                 if white_ref_path is None and auto_white:
                     white_ref_path = auto_white
@@ -1406,41 +1410,94 @@ class HS_preprocessor:
         }
 
     @staticmethod
-    def _find_calibration_files(data_file_path):
+    def _find_calibration_files(data_file_path, need_white=True, need_dark=True):
         """
         Find matching white and dark calibration files for a data file.
         
-        Extracts base name by splitting filename by '_' and joining all parts except the last one.
-        For example: '164_35_2023-02-05_12-11-24_PS_Tray_078_VNIR_Data.hdr' 
-                  -> '164_35_2023-02-05_12-11-24_PS_Tray_078_VNIR'
-        Then looks for: '{base_name}_WhiteCalibration.hdr' and '{base_name}_DarkCalibration.hdr'
+        Detection order:
+        1) Split filename by '_' and join all parts except the last one.
+        2) If files are not found, split filename by '-' and join all parts except the last one.
+        For each derived base name, tries both separator variants for calibration suffixes:
+        - '{base}_WhiteCalibration.hdr' / '{base}_DarkCalibration.hdr'
+        - '{base}-WhiteCalibration.hdr' / '{base}-DarkCalibration.hdr'
         
         Returns:
             tuple: (white_cal_path, dark_cal_path) - either can be None if not found
         """
         folder = os.path.dirname(data_file_path)
         filename = os.path.basename(data_file_path)
-        
-        # Split by underscore and join all except last part
-        parts = filename.split("_")
-        if len(parts) < 2:
-            # Cannot determine base name, return None
-            return None, None
-        
-        base_name = "_".join(parts[:-1])  # Everything except last part
-        
-        # Construct calibration file names
-        white_cal_name = f"{base_name}_WhiteCalibration.hdr"
-        dark_cal_name = f"{base_name}_DarkCalibration.hdr"
-        
-        # Full paths
-        white_cal_path = os.path.join(folder, white_cal_name)
-        dark_cal_path = os.path.join(folder, dark_cal_name)
-        
-        # Check if they exist
-        white_cal = white_cal_path if os.path.exists(white_cal_path) else None
-        dark_cal = dark_cal_path if os.path.exists(dark_cal_path) else None
-        
+
+        def build_base_name(name, splitter):
+            parts = name.split(splitter)
+            if len(parts) < 2:
+                return None
+            return splitter.join(parts[:-1])
+
+        def resolve_calibration_paths(base_name):
+            white_candidates = [
+                os.path.join(folder, f"{base_name}_WhiteCalibration.hdr"),
+                os.path.join(folder, f"{base_name}-WhiteCalibration.hdr"),
+            ]
+            dark_candidates = [
+                os.path.join(folder, f"{base_name}_DarkCalibration.hdr"),
+                os.path.join(folder, f"{base_name}-DarkCalibration.hdr"),
+            ]
+
+            white_match = next((p for p in white_candidates if os.path.exists(p)), None)
+            dark_match = next((p for p in dark_candidates if os.path.exists(p)), None)
+            return white_match, dark_match
+
+        def unique_generic_candidate(calibration_kind):
+            suffix = f"{calibration_kind.lower()}calibration.hdr"
+            candidates = []
+            for item in os.listdir(folder):
+                lower_item = item.lower()
+                if lower_item.endswith(suffix):
+                    candidates.append(os.path.join(folder, item))
+
+            if len(candidates) == 1:
+                return candidates[0]
+            if len(candidates) == 0:
+                raise ValueError(
+                    f"Auto-detection failed for {calibration_kind}Calibration near '{filename}': "
+                    f"no matching-name file and no generic {calibration_kind}Calibration file found in folder '{folder}'."
+                )
+
+            raise ValueError(
+                f"Auto-detection failed for {calibration_kind}Calibration near '{filename}': "
+                f"no matching-name file and multiple generic candidates found in folder '{folder}': {candidates}"
+            )
+
+        # Strategy 1: underscore split (legacy/default)
+        base_name_underscore = build_base_name(filename, "_")
+        white_cal = None
+        dark_cal = None
+
+        if base_name_underscore:
+            auto_white, auto_dark = resolve_calibration_paths(base_name_underscore)
+            if white_cal is None and auto_white is not None:
+                white_cal = auto_white
+            if dark_cal is None and auto_dark is not None:
+                dark_cal = auto_dark
+
+        if (not need_white or white_cal is not None) and (not need_dark or dark_cal is not None):
+            return white_cal, dark_cal
+
+        # Strategy 2: hyphen split (fallback)
+        base_name_hyphen = build_base_name(filename, "-")
+        if base_name_hyphen:
+            auto_white, auto_dark = resolve_calibration_paths(base_name_hyphen)
+            if white_cal is None and auto_white is not None:
+                white_cal = auto_white
+            if dark_cal is None and auto_dark is not None:
+                dark_cal = auto_dark
+
+        if need_white and white_cal is None:
+            white_cal = unique_generic_candidate("White")
+
+        if need_dark and dark_cal is None:
+            dark_cal = unique_generic_candidate("Dark")
+
         return white_cal, dark_cal
     
     @staticmethod
@@ -1516,8 +1573,13 @@ class HS_preprocessor:
                 If None and images have 6 channels, uses default MS_image mapping.
             segmentation_output_dir (str, optional): If provided, saves segmentation masks to this directory.
             show_segmentation (bool): Visualize segmentation results with image/mask/overlay. Default: False
-            tray_mask (str, optional): Path to XSEL tray mask file used during spectra extraction
-                (return_df=True). If None, tray_position is returned as empty values.
+            tray_mask (str, optional): Path to XSEL tray mask file.
+                - return_df=True:  extracts spectra per sub-area; DataFrame includes
+                  'tray_position' column with sub-area names (e.g. "A1", "B3").
+                - return_df=False: each image is split into N cropped HS_image objects
+                  (one per tray sub-area), keyed as ``"filename_AreaName"``.
+                  Each sub-image is cropped to the sub-area bounding box with non-plant
+                  pixels zeroed. N images × M sub-areas → N×M entries in the result dict.
             
         Returns:
             dict or pd.DataFrame: 
@@ -1605,7 +1667,11 @@ class HS_preprocessor:
                     current_dark_ref = dark_ref_path
                     
                     if white_ref_path is None or dark_ref_path is None:
-                        auto_white, auto_dark = HS_preprocessor._find_calibration_files(img_path)
+                        auto_white, auto_dark = HS_preprocessor._find_calibration_files(
+                            img_path,
+                            need_white=(white_ref_path is None),
+                            need_dark=(dark_ref_path is None)
+                        )
                         
                         if white_ref_path is None and auto_white:
                             current_white_ref = auto_white
@@ -1735,7 +1801,11 @@ class HS_preprocessor:
                     current_dark_ref = dark_ref_path
                     
                     if white_ref_path is None or dark_ref_path is None:
-                        auto_white, auto_dark = HS_preprocessor._find_calibration_files(img_path)
+                        auto_white, auto_dark = HS_preprocessor._find_calibration_files(
+                            img_path,
+                            need_white=(white_ref_path is None),
+                            need_dark=(dark_ref_path is None)
+                        )
                         
                         if white_ref_path is None and auto_white:
                             current_white_ref = auto_white
@@ -1808,9 +1878,27 @@ class HS_preprocessor:
                         print(f"Failed {filename}: {str(e)}")
                     results[filename] = None
             
+            # If tray_mask provided, expand each image into per-sub-area HS_image objects
+            if tray_mask is not None:
+                expanded = {}
+                for key, hs_image in results.items():
+                    if hs_image is None:
+                        continue
+                    try:
+                        sub_images = HS_preprocessor._split_image_by_tray_mask(hs_image, tray_mask)
+                        for area_name, sub_img in sub_images.items():
+                            expanded[f"{key}_{area_name}"] = sub_img
+                        if verbose:
+                            print(f"  {key}: split into {len(sub_images)} tray sub-images")
+                    except Exception as te:
+                        if verbose:
+                            print(f"  Warning: tray split failed for {key}: {te}")
+                        expanded[key] = hs_image
+                results = expanded
+
             if verbose:
                 successful_results = [r for r in results.values() if r is not None]
-                print(f"\nProcessed {len(successful_results)}/{len(image_paths)} images successfully")
+                print(f"\nProcessed {len(successful_results)} result images successfully")
                 if apply_segmentation:
                     mask_count = sum(1 for r in successful_results if hasattr(r, 'mask') and r.mask is not None)
                     print(f"Segmentation applied to {mask_count}/{len(successful_results)} processed images")
@@ -1819,6 +1907,75 @@ class HS_preprocessor:
     
     # ==================== SEGMENTATION INTEGRATION ====================
     
+    @staticmethod
+    def _split_image_by_tray_mask(hs_image, tray_mask_path):
+        """
+        Split a processed HS_image into one cropped HS_image per tray sub-area.
+
+        For each sub-area defined in the XSEL file:
+          1. Combine the image's plant mask with the sub-area rectangle mask.
+          2. Crop the image to the sub-area bounding box.
+          3. Zero out pixels that fall outside the combined (plant AND tray) mask.
+          4. Return a new HS_image with updated spatial metadata and name
+             ``<original_name>_<area_name>``.
+
+        Args:
+            hs_image: Processed HS_image with .img, .ind, .mask/.seg_mask, .meta, .name.
+            tray_mask_path (str): Path to the XSEL tray mask file.
+
+        Returns:
+            dict[str, HS_image]: {area_name: cropped_HS_image}
+        """
+        tray_masks = hs_image._load_tray_masks_from_xsel(tray_mask_path)
+
+        # Resolve the plant mask (2D bool)
+        plant_mask = hs_image._get_mask_2d() if hasattr(hs_image, '_get_mask_2d') else None
+        if plant_mask is None:
+            plant_mask = np.ones(hs_image.img.shape[:2], dtype=bool)
+
+        sub_images = {}
+        for area_name, tray_area_mask in tray_masks.items():
+            # Bounding box from the rectangular tray area mask
+            rows = np.where(tray_area_mask.any(axis=1))[0]
+            cols = np.where(tray_area_mask.any(axis=0))[0]
+            if rows.size == 0 or cols.size == 0:
+                continue  # Empty rectangle
+
+            top, bottom = int(rows[0]), int(rows[-1]) + 1
+            left, right = int(cols[0]), int(cols[-1]) + 1
+
+            # Combined mask: plant pixels that also fall inside this tray area
+            combined_mask = plant_mask & tray_area_mask
+
+            # Crop image and combined mask to sub-area bounding box
+            cropped_img = hs_image.img[top:bottom, left:right, :].copy()
+            cropped_combined = combined_mask[top:bottom, left:right]
+
+            # Zero out non-plant pixels within the crop
+            cropped_img[~cropped_combined] = 0
+
+            # Build new HS_image shell (no data_path load)
+            sub = hs_image.__class__.__new__(hs_image.__class__)
+            sub.__dict__.update({k: v for k, v in hs_image.__dict__.items()
+                                  if k not in ('img', 'meta', 'name', 'mask',
+                                               'tray_masks', 'tray_seg_masks',
+                                               'tray_segmented_hypercubes')})
+            sub.img = cropped_img
+            sub.ind = list(hs_image.ind)  # Same wavelengths
+            sub.name = f"{hs_image.name}_{area_name}"
+
+            # Update spatial metadata
+            sub.meta = copy.deepcopy(hs_image.meta)
+            sub.meta['lines'] = bottom - top
+            sub.meta['samples'] = right - left
+
+            # Carry cropped plant mask
+            sub.mask = cropped_combined
+
+            sub_images[area_name] = sub
+
+        return sub_images
+
     def load_segmentation_model(self, model_path, verbose=None):
         """
         Load a trained SpectralSegmenter model for automatic segmentation.
@@ -1966,13 +2123,14 @@ class HS_preprocessor:
         self.step_results['spectral_cropped'] = copy.deepcopy(self.image)
         return self
     
-    def sensor_calibration(self, white_ref_path=None, dark_calibration=False, clip_to=10):
+    def sensor_calibration(self, white_ref_path=None, dark_calibration=None, clip_to=10):
         """
         Step 1: Apply white reference calibration (first step - converts raw counts to reflectance).
         
         Parameters:
             white_ref_path (str, optional): Path to white calibration file. If None, auto-detects from image metadata.
-            dark_calibration (str or bool, optional): Path to dark calibration file, or False to skip dark calibration.
+            dark_calibration (str or bool, optional): Path to dark calibration file.
+                If None, tries auto-detection from image filename. If False, skips dark calibration.
             clip_to (float): Maximum reflectance value for clipping.
         """
         if self.image is None:
@@ -1981,7 +2139,28 @@ class HS_preprocessor:
             if self.verbose:
                 print("Image already sensor calibrated. Skipping this step.")
             return self
-        
+
+        # Auto-detect white and dark calibration in single-image mode when not explicitly provided
+        image_path_for_search = getattr(self, 'image_path', None) or (self.image.data_path if self.image else None)
+        if image_path_for_search and (white_ref_path is None or dark_calibration is None):
+            try:
+                auto_white, auto_dark = HS_preprocessor._find_calibration_files(
+                    image_path_for_search,
+                    need_white=(white_ref_path is None),
+                    need_dark=(dark_calibration is None)
+                )
+                if white_ref_path is None and auto_white is not None:
+                    white_ref_path = auto_white
+                    if self.verbose:
+                        print(f"  Auto-detected white calibration: {os.path.basename(auto_white)}")
+                if dark_calibration is None and auto_dark is not None:
+                    dark_calibration = auto_dark
+                    if self.verbose:
+                        print(f"  Auto-detected dark calibration: {os.path.basename(auto_dark)}")
+            except ValueError as e:
+                if white_ref_path is None:
+                    raise RuntimeError(f"Could not auto-detect calibration files: {e}") from e
+
         # Get calibration matrices
         if white_ref_path is not None:
             white_matrix, dark_matrix = self._upload_calibration(dark_calibration=dark_calibration, white_ref_path=white_ref_path)
@@ -1989,9 +2168,9 @@ class HS_preprocessor:
             self.image.img = np.clip((self.image.img - dark_matrix) / (white_matrix - dark_matrix), 0, clip_to)
         else:
             try:
-                self.image.calibrate(clip_to=clip_to)
+                self.image.calibrate(dc=bool(dark_calibration), clip_to=clip_to)
             except Exception as e:
-                raise RuntimeError(f"WHite calibration was not found!: {str(e)}")
+                raise RuntimeError(f"White calibration was not found!: {str(e)}")
      
         # Clean up NaN and Inf values
         self.image.img[np.isnan(self.image.img)] = 0
