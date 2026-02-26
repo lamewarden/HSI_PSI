@@ -1495,7 +1495,7 @@ class HS_preprocessor:
     def process_folder(folder_path, white_ref_path=None, dark_ref_path=None, reference_teflon=None, 
                       config=None, config_path=None, pattern="*Data.hdr", verbose=False,
                       apply_segmentation=True, return_df=False, map_channels=None,
-                      segmentation_output_dir=None, show_segmentation=False):
+                      segmentation_output_dir=None, show_segmentation=False, tray_mask=None):
         """
         Process all hyperspectral images in a folder with integrated segmentation.
         
@@ -1516,6 +1516,8 @@ class HS_preprocessor:
                 If None and images have 6 channels, uses default MS_image mapping.
             segmentation_output_dir (str, optional): If provided, saves segmentation masks to this directory.
             show_segmentation (bool): Visualize segmentation results with image/mask/overlay. Default: False
+            tray_mask (str, optional): Path to XSEL tray mask file used during spectra extraction
+                (return_df=True). If None, tray_position is returned as empty values.
             
         Returns:
             dict or pd.DataFrame: 
@@ -1616,7 +1618,7 @@ class HS_preprocessor:
                                 print(f"  Auto-detected dark calibration: {os.path.basename(auto_dark)}")
                     
                     # Create processor and run pipeline (inherit verbose setting)
-                    processor = HS_preprocessor(img_path, verbose=verbose)
+                    processor = HS_preprocessor(img_path, verbose=verbose, map_channels=map_channels)
                     
                     # Set the processor's config from the loaded/provided configuration
                     if final_config is not None:
@@ -1672,38 +1674,23 @@ class HS_preprocessor:
                             total_pixels = hs_image.mask.shape[0] * hs_image.mask.shape[1]
                             print(f"Mask: {mask_pixels}/{total_pixels} pixels ({100*mask_pixels/total_pixels:.1f}%)")
                     
-                    # Extract spectral data immediately to avoid memory accumulation
-                    if hs_image is not None and hasattr(hs_image, 'mask') and hs_image.mask is not None:
-                        # Apply mask to the image
-                        masked_image = hs_image.img * hs_image.mask
-                        
-                        # Reshape to 2D: (pixels, bands)
-                        masked_img_flat = masked_image.reshape(-1, masked_image.shape[2])
-                        
-                        # Filter out zero pixels (non-masked pixels)
-                        masked_img_filtered = masked_img_flat[~np.all(masked_img_flat == 0, axis=1)]
-                        
-                        if len(masked_img_filtered) > 0:
-                            # Create DataFrame with wavelengths as column names
-                            masked_img_df = pd.DataFrame(masked_img_filtered, columns=hs_image.ind)
-                            
-                            # Extract label from filename (format: "X-X-LABEL-X-...")
-                            try:
-                                label = hs_image.name.split("-")[2] if hasattr(hs_image, 'name') else filename.split("-")[2]
-                            except IndexError:
-                                label = "unknown"
-                            
-                            masked_img_df['label'] = label
-                            extracted_spectra.append(masked_img_df)
-                            
-                            if verbose:
-                                print(f"Extracted {len(masked_img_filtered)} masked pixels from {filename}")
-                        else:
-                            if verbose:
-                                print(f"No masked pixels found in {filename}")
+                    # Extract masked spectra immediately to avoid memory accumulation
+                    label = HS_preprocessor._infer_image_label(hs_image, fallback_name=filename, default_label="unknown")
+                    masked_img_df = HS_preprocessor._extract_single_image_masked_df(
+                        hs_image,
+                        label_fg=label,
+                        segmentation=False,
+                        verbose=verbose,
+                        tray_mask=tray_mask
+                    )
+
+                    if not masked_img_df.empty:
+                        extracted_spectra.append(masked_img_df)
+                        if verbose:
+                            print(f"Extracted {len(masked_img_df)} masked pixels from {filename}")
                     else:
                         if verbose:
-                            print(f"Skipping spectral extraction for {filename}: no image or mask data")
+                            print(f"No masked pixels found in {filename}")
                     
                     successful_count += 1
                     
@@ -1848,7 +1835,7 @@ class HS_preprocessor:
             processor.load_segmentation_model('models/best_segmenter.pkl')
             processor.load_image('data/new_sample.hdr')
             processor.run_full_pipeline(apply_segmentation=True)
-        """
+        """ 
         try:
             from .segmentation import SpectralSegmenter
         except ImportError:
@@ -2737,7 +2724,39 @@ class HS_preprocessor:
     
     
     @staticmethod
-    def extract_masked_spectra_to_df(processed_images_dict, save_path=None, segmentation=False, verbose=False, labels=None):
+    def _infer_image_label(hs_image, fallback_name=None, default_label="FG"):
+        """Infer label from image name using legacy filename convention."""
+        try:
+            if hs_image is not None and hasattr(hs_image, 'name') and hs_image.name:
+                base = hs_image.name
+            else:
+                base = fallback_name if fallback_name is not None else ""
+            parts = base.split("-")
+            return parts[2] if len(parts) > 2 else default_label
+        except Exception:
+            return default_label
+
+    @staticmethod
+    def _extract_single_image_masked_df(hs_image, label_fg="FG", segmentation=False, verbose=False, tray_mask=None):
+        """Extract masked spectra from a single HS/MS image as DataFrame."""
+        if hs_image is None:
+            return pd.DataFrame()
+
+        try:
+            return hs_image.extract_masked_spectra(
+                include_background=segmentation,
+                as_dataframe=True,
+                foreground_label=label_fg,
+                background_label="BG",
+                tray_mask=tray_mask
+            )
+        except Exception as e:
+            if verbose:
+                print(f"    Skipping: failed masked extraction ({e})")
+            return pd.DataFrame()
+
+    @staticmethod
+    def extract_masked_spectra_to_df(processed_images_dict, save_path=None, segmentation=False, verbose=False, labels=None, tray_mask=None):
         """
         Extract pixel spectra from hyperspectral images into a DataFrame.
         
@@ -2761,6 +2780,9 @@ class HS_preprocessor:
             List of label strings, one for each image in processed_images_dict.
             If provided, these labels will be used instead of parsing filenames.
             Length must match the number of images.
+        tray_mask : str, optional
+            Path to XSEL tray mask file. If provided, extraction includes tray-wise
+            segmentation and `tray_position` column.
 
         Returns
         -------
@@ -2779,9 +2801,7 @@ class HS_preprocessor:
             if verbose:
                 print(f" Using provided labels: {labels}")
         
-        # Pre-allocate lists for efficiency
-        all_spectra = []
-        all_labels = []
+        extracted_frames = []
         total_pixels = 0
         
         if verbose:
@@ -2791,95 +2811,38 @@ class HS_preprocessor:
             if verbose:
                 print(f"  Processing {i+1}/{len(processed_images_dict)}: {filename}")
                 
-            # Validation checks
-            if hs_image is None or not hasattr(hs_image, 'img') or hs_image.img is None:
-                if verbose:
-                    print(f"    Skipping: no image data")
-                continue
-            if not hasattr(hs_image, 'mask') or hs_image.mask is None:
-                if verbose:
-                    print(f"    Skipping: no mask data")
-                continue
-
-            img = hs_image.img  # (H, W, B)
-            if img.ndim != 3:
-                if verbose:
-                    print(f"    Skipping: unexpected image shape {img.shape}")
-                continue
-
-            H, W, B = img.shape
-
-            # Normalize mask to 2D boolean (H, W) - optimized
-            mask = hs_image.mask
-            if mask.ndim == 3:
-                if mask.shape[2] == 1:
-                    mask_2d = mask[:, :, 0].astype(bool)
-                elif mask.shape[2] == B:
-                    # Per-band mask -> any band marked as True counts as FG
-                    mask_2d = np.any(mask, axis=2)
-                else:
-                    # Fallback: any nonzero across channels
-                    mask_2d = np.any(mask != 0, axis=2)
-            elif mask.ndim == 2:
-                mask_2d = mask.astype(bool)
-            else:
-                if verbose:
-                    print(f"    Skipping: unexpected mask shape {mask.shape}")
-                continue
-
-            # Wavelengths validation
-            if not hasattr(hs_image, 'ind'):
-                if verbose:
-                    print(f"    Skipping: hs_image.ind (wavelengths) not found")
-                continue
-            if len(hs_image.ind) != B:
-                if verbose:
-                    print(f"    Skipping: wavelengths length {len(hs_image.ind)} != bands {B}")
-                continue
-
             # Generate label from provided list or parse from filename
             if labels is not None:
                 # Use provided label
                 label_fg = labels[i]
             else:
-                # Parse label from filename (legacy behavior)
-                try:
-                    base = hs_image.name if hasattr(hs_image, 'name') and hs_image.name else filename
-                    parts = base.split("-")
-                    label_fg = parts[2] if len(parts) > 2 else "FG"
-                except Exception:
-                    label_fg = "FG"
+                label_fg = HS_preprocessor._infer_image_label(hs_image, fallback_name=filename, default_label="FG")
 
-            # Extract foreground pixels - vectorized approach
-            fg_indices = np.where(mask_2d)
-            if len(fg_indices[0]) > 0:
-                fg_spectra = img[fg_indices]  # Direct indexing - much faster!
-                all_spectra.append(fg_spectra)
-                all_labels.extend([label_fg] * len(fg_spectra))
-                fg_count = len(fg_spectra)
-                total_pixels += fg_count
-            else:
-                fg_count = 0
+            image_df = HS_preprocessor._extract_single_image_masked_df(
+                hs_image,
+                label_fg=label_fg,
+                segmentation=segmentation,
+                verbose=verbose,
+                tray_mask=tray_mask
+            )
 
-            # Extract background pixels if requested
-            if segmentation:
-                bg_indices = np.where(~mask_2d)
-                if len(bg_indices[0]) > 0:
-                    bg_spectra = img[bg_indices]
-                    all_spectra.append(bg_spectra)
-                    all_labels.extend(["BG"] * len(bg_spectra))
-                    bg_count = len(bg_spectra)
-                    total_pixels += bg_count
-                else:
-                    bg_count = 0
-                    
+            if image_df.empty:
                 if verbose:
+                    print("    No masked pixels extracted")
+                continue
+
+            extracted_frames.append(image_df)
+            total_pixels += len(image_df)
+
+            if verbose:
+                if segmentation:
+                    fg_count = int(np.sum(image_df['label'] == label_fg))
+                    bg_count = int(np.sum(image_df['label'] == "BG"))
                     print(f"     Extracted {fg_count} FG + {bg_count} BG pixels")
-            else:
-                if verbose:
-                    print(f"     Extracted {fg_count} FG pixels")
+                else:
+                    print(f"     Extracted {len(image_df)} FG pixels")
 
-        if not all_spectra:
+        if not extracted_frames:
             if verbose:
                 print(" No spectral data extracted!")
             return pd.DataFrame()
@@ -2888,25 +2851,11 @@ class HS_preprocessor:
         if verbose:
             print(f" Combining {total_pixels} total pixels...")
             
-        combined_spectra = np.vstack(all_spectra)
-        
-        # Create DataFrame efficiently
         if verbose:
             print(f" Creating DataFrame...")
-            
-        # Get wavelengths from first valid image
-        wavelengths = None
-        for hs_image in processed_images_dict.values():
-            if hasattr(hs_image, 'ind'):
-                wavelengths = list(hs_image.ind)
-                break
-                
-        if wavelengths is None:
-            raise ValueError("No wavelength information found in any image")
-            
-        # Create DataFrame in one go - much faster
-        df = pd.DataFrame(combined_spectra, columns=wavelengths)
-        df["label"] = all_labels
+
+        df = pd.concat(extracted_frames, axis=0, ignore_index=True)
+        wavelengths = [c for c in df.columns if c not in ('label', 'tray_position')]
 
         elapsed = time.time() - start_time
         if verbose:

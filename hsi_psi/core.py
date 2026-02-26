@@ -9,6 +9,7 @@ import os
 import copy
 import warnings
 import json  # Add this missing import
+import xml.etree.ElementTree as ET
 
 # Ignore RuntimeWarning
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -535,6 +536,179 @@ class HS_image:
         
         """               
         return pd.DataFrame(self.img[self.img.mean(axis=2) != 0], columns=self.ind)
+
+    def _get_mask_2d(self):
+        """Convert image mask to a 2D boolean mask with shape (H, W)."""
+        if not hasattr(self, 'mask') or self.mask is None:
+            raise ValueError("No mask found on image. Set image.mask first.")
+
+        if not hasattr(self, 'img') or self.img is None:
+            raise ValueError("No image data found.")
+
+        if self.img.ndim != 3:
+            raise ValueError(f"Image must be 3D (H, W, B), got shape {self.img.shape}")
+
+        _, _, bands = self.img.shape
+        mask = self.mask
+
+        if mask.ndim == 3:
+            if mask.shape[2] == 1:
+                mask_2d = mask[:, :, 0].astype(bool)
+            elif mask.shape[2] == bands:
+                mask_2d = np.any(mask, axis=2)
+            else:
+                mask_2d = np.any(mask != 0, axis=2)
+        elif mask.ndim == 2:
+            mask_2d = mask.astype(bool)
+        else:
+            raise ValueError(f"Mask must be 2D or 3D, got shape {mask.shape}")
+
+        if mask_2d.shape != self.img.shape[:2]:
+            raise ValueError(
+                f"Mask shape {mask_2d.shape} does not match image spatial shape {self.img.shape[:2]}"
+            )
+
+        return mask_2d
+
+    def _load_tray_masks_from_xsel(self, tray_mask_path):
+        """Load tray sub-area masks from an XSEL file as dict[name -> 2D bool mask]."""
+        if tray_mask_path is None:
+            return None
+
+        root = ET.parse(tray_mask_path).getroot()
+
+        try:
+            height = int(root.attrib["height"])
+            width = int(root.attrib["width"])
+        except KeyError as exc:
+            raise ValueError(f"Missing required XSEL attribute: {exc}") from exc
+
+        if (height, width) != self.img.shape[:2]:
+            raise ValueError(
+                f"Tray mask shape ({height}, {width}) does not match image shape {self.img.shape[:2]}"
+            )
+
+        subarea_masks = {}
+        for index, rect in enumerate(root.findall(".//TRectangleShape")):
+            name = rect.attrib.get("name", f"tray_{index}")
+            left = int(rect.attrib["left"])
+            top = int(rect.attrib["top"])
+            right = int(rect.attrib["right"])
+            bottom = int(rect.attrib["bottom"])
+
+            left = max(0, min(left, width))
+            right = max(0, min(right, width))
+            top = max(0, min(top, height))
+            bottom = max(0, min(bottom, height))
+
+            mask = np.zeros((height, width), dtype=bool)
+            if bottom > top and right > left:
+                mask[top:bottom, left:right] = True
+            subarea_masks[name] = mask
+
+        if not subarea_masks:
+            raise ValueError(f"No tray sub-areas found in XSEL file: {tray_mask_path}")
+
+        return subarea_masks
+
+    def extract_masked_spectra(self, include_background=False, as_dataframe=False,
+                               foreground_label="FG", background_label="BG", tray_mask=None):
+        """
+        Extract masked pixel spectra from this image.
+
+        Args:
+            include_background (bool): If True, also extract non-masked pixels.
+            as_dataframe (bool): If True, returns a DataFrame with wavelength columns and 'label'.
+            foreground_label (str): Label for masked pixels when as_dataframe=True.
+            background_label (str): Label for background pixels when as_dataframe=True.
+            tray_mask (str, optional): Path to XSEL tray mask file. If provided, spectra are
+                extracted per tray sub-area and DataFrame includes 'tray_position'.
+
+        Returns:
+            If as_dataframe=False:
+                - include_background=False: np.ndarray of foreground spectra (N_fg, B)
+                - include_background=True: tuple(fg_spectra, bg_spectra)
+            If as_dataframe=True:
+                pd.DataFrame with wavelength columns, 'label', and 'tray_position'
+        """
+        if not hasattr(self, 'img') or self.img is None:
+            raise ValueError("No image data found.")
+
+        if self.img.ndim != 3:
+            raise ValueError(f"Image must be 3D (H, W, B), got shape {self.img.shape}")
+
+        if not hasattr(self, 'ind'):
+            raise ValueError("Image wavelengths (ind) are missing.")
+
+        _, _, bands = self.img.shape
+        if len(self.ind) != bands:
+            raise ValueError(f"Wavelength count ({len(self.ind)}) does not match bands ({bands}).")
+
+        mask_2d = self._get_mask_2d()
+        tray_masks = self._load_tray_masks_from_xsel(tray_mask) if tray_mask is not None else None
+
+        if tray_masks is None:
+            fg_spectra = self.img[mask_2d]
+        else:
+            tray_seg_masks = {}
+            tray_segmented_hypercubes = {}
+            fg_chunks = []
+
+            for tray_name, tray_mask_2d in tray_masks.items():
+                tray_seg_mask = mask_2d & tray_mask_2d
+                tray_seg_masks[tray_name] = tray_seg_mask
+                tray_segmented_hypercubes[tray_name] = np.where(tray_seg_mask[:, :, np.newaxis], self.img, 0)
+
+                tray_fg = self.img[tray_seg_mask]
+                if tray_fg.size > 0:
+                    fg_chunks.append(tray_fg)
+
+            self.tray_masks = tray_masks
+            self.tray_seg_masks = tray_seg_masks
+            self.tray_segmented_hypercubes = tray_segmented_hypercubes
+
+            if fg_chunks:
+                fg_spectra = np.vstack(fg_chunks)
+            else:
+                fg_spectra = np.empty((0, bands), dtype=self.img.dtype)
+
+        bg_spectra = self.img[~mask_2d] if include_background else None
+
+        if not as_dataframe:
+            if include_background:
+                return fg_spectra, bg_spectra
+            return fg_spectra
+
+        frames = []
+
+        if tray_masks is None:
+            if fg_spectra.size > 0:
+                fg_df = pd.DataFrame(fg_spectra, columns=self.ind)
+                fg_df['label'] = foreground_label
+                fg_df['tray_position'] = ""
+                frames.append(fg_df)
+        else:
+            for tray_name, tray_mask_2d in tray_masks.items():
+                tray_seg_mask = mask_2d & tray_mask_2d
+                tray_fg = self.img[tray_seg_mask]
+                if tray_fg.size == 0:
+                    continue
+
+                tray_df = pd.DataFrame(tray_fg, columns=self.ind)
+                tray_df['label'] = self.name
+                tray_df['tray_position'] = tray_name
+                frames.append(tray_df)
+
+        if include_background and bg_spectra is not None and bg_spectra.size > 0:
+            bg_df = pd.DataFrame(bg_spectra, columns=self.ind)
+            bg_df['label'] = background_label
+            bg_df['tray_position'] = ""
+            frames.append(bg_df)
+
+        if not frames:
+            return pd.DataFrame(columns=list(self.ind) + ['label', 'tray_position'])
+
+        return pd.concat(frames, axis=0, ignore_index=True)
 
 
 class MS_image(HS_image):
