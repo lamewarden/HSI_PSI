@@ -797,11 +797,39 @@ class HS_preprocessor:
         
         # Handle sensor calibration (Step 1)
         if step == 'sensor_calibration':
-            # Filter out metadata and handle white_ref_path separately
+            # Filter out metadata and handle white_ref_path and dark_calibration separately
             method_params = {k: v for k, v in step_params.items() 
-                           if k not in ['white_ref_path', 'calibration_applied', 'calibration_source']}
+                           if k not in ['white_ref_path', 'dark_calibration', 'calibration_applied', 'calibration_source']}
             white_ref_path = step_params.get('white_ref_path', None)
-            self.sensor_calibration(white_ref_path=white_ref_path, **method_params)
+            dark_calibration = step_params.get('dark_calibration', None)
+            
+            # Auto-detect calibration files if not provided
+            if (white_ref_path is None or dark_calibration is None) and hasattr(self, 'image_path') and self.image_path:
+                auto_white, auto_dark = HS_preprocessor._find_calibration_files(self.image_path)
+                
+                if white_ref_path is None and auto_white:
+                    white_ref_path = auto_white
+                    if self.verbose:
+                        print(f"  Auto-detected white calibration: {os.path.basename(auto_white)}")
+                
+                if dark_calibration is None and auto_dark:
+                    dark_calibration = auto_dark
+                    if self.verbose:
+                        print(f"  Auto-detected dark calibration: {os.path.basename(auto_dark)}")
+            
+            # Apply sensor calibration if we have at least white reference
+            if white_ref_path is not None:
+                self.sensor_calibration(white_ref_path=white_ref_path, dark_calibration=dark_calibration, **method_params)
+            else:
+                # Try to use auto-detection from image metadata
+                if self.verbose:
+                    print("  No white calibration found, attempting auto-detection from image metadata...")
+                try:
+                    self.sensor_calibration(white_ref_path=None, dark_calibration=dark_calibration, **method_params)
+                except Exception as e:
+                    if self.verbose:
+                        print(f"  Warning: Sensor calibration skipped - {str(e)}")
+                    # Skip sensor calibration if auto-detection fails
         
         # Handle spike removal (Step 2)
         elif step == 'spike_removal':
@@ -1378,6 +1406,44 @@ class HS_preprocessor:
         }
 
     @staticmethod
+    def _find_calibration_files(data_file_path):
+        """
+        Find matching white and dark calibration files for a data file.
+        
+        Extracts base name by splitting filename by '_' and joining all parts except the last one.
+        For example: '164_35_2023-02-05_12-11-24_PS_Tray_078_VNIR_Data.hdr' 
+                  -> '164_35_2023-02-05_12-11-24_PS_Tray_078_VNIR'
+        Then looks for: '{base_name}_WhiteCalibration.hdr' and '{base_name}_DarkCalibration.hdr'
+        
+        Returns:
+            tuple: (white_cal_path, dark_cal_path) - either can be None if not found
+        """
+        folder = os.path.dirname(data_file_path)
+        filename = os.path.basename(data_file_path)
+        
+        # Split by underscore and join all except last part
+        parts = filename.split("_")
+        if len(parts) < 2:
+            # Cannot determine base name, return None
+            return None, None
+        
+        base_name = "_".join(parts[:-1])  # Everything except last part
+        
+        # Construct calibration file names
+        white_cal_name = f"{base_name}_WhiteCalibration.hdr"
+        dark_cal_name = f"{base_name}_DarkCalibration.hdr"
+        
+        # Full paths
+        white_cal_path = os.path.join(folder, white_cal_name)
+        dark_cal_path = os.path.join(folder, dark_cal_name)
+        
+        # Check if they exist
+        white_cal = white_cal_path if os.path.exists(white_cal_path) else None
+        dark_cal = dark_cal_path if os.path.exists(dark_cal_path) else None
+        
+        return white_cal, dark_cal
+    
+    @staticmethod
     def create_config_template():
         """Create a template configuration dictionary for user to fill."""
         template = {
@@ -1426,7 +1492,7 @@ class HS_preprocessor:
         return template
     
     @staticmethod
-    def process_folder(folder_path, white_ref_path=None, reference_teflon=None, 
+    def process_folder(folder_path, white_ref_path=None, dark_ref_path=None, reference_teflon=None, 
                       config=None, config_path=None, pattern="*Data.hdr", verbose=False,
                       apply_segmentation=True, return_df=False, map_channels=None,
                       segmentation_output_dir=None, show_segmentation=False):
@@ -1435,7 +1501,8 @@ class HS_preprocessor:
         
         Args:
             folder_path (str): Path to folder containing images
-            white_ref_path (str, optional): Path to white reference file
+            white_ref_path (str, optional): Path to white reference file. If None, auto-detects from filename pattern
+            dark_ref_path (str, optional): Path to dark calibration file. If None, auto-detects from filename pattern
             reference_teflon (dict/array, optional): Reference teflon spectrum
             config (dict, optional): Configuration dictionary
             config_path (str, optional): Path to config file to load (takes precedence over config)
@@ -1531,6 +1598,23 @@ class HS_preprocessor:
                     if verbose:
                         print(f"\nProcessing: {filename}")
                     
+                    # Auto-detect calibration files if not provided
+                    current_white_ref = white_ref_path
+                    current_dark_ref = dark_ref_path
+                    
+                    if white_ref_path is None or dark_ref_path is None:
+                        auto_white, auto_dark = HS_preprocessor._find_calibration_files(img_path)
+                        
+                        if white_ref_path is None and auto_white:
+                            current_white_ref = auto_white
+                            if verbose:
+                                print(f"  Auto-detected white calibration: {os.path.basename(auto_white)}")
+                        
+                        if dark_ref_path is None and auto_dark:
+                            current_dark_ref = auto_dark
+                            if verbose:
+                                print(f"  Auto-detected dark calibration: {os.path.basename(auto_dark)}")
+                    
                     # Create processor and run pipeline (inherit verbose setting)
                     processor = HS_preprocessor(img_path, verbose=verbose)
                     
@@ -1562,9 +1646,13 @@ class HS_preprocessor:
                     # Set up config override for external parameters
                     config_override = {}
                     
-                    # Add white reference path to sensor calibration config if provided
-                    if white_ref_path:
-                        config_override['sensor_calibration'] = {'white_ref_path': white_ref_path}
+                    # Add white reference and dark calibration paths to sensor calibration config if provided
+                    if current_white_ref or current_dark_ref:
+                        config_override['sensor_calibration'] = {}
+                        if current_white_ref:
+                            config_override['sensor_calibration']['white_ref_path'] = current_white_ref
+                        if current_dark_ref:
+                            config_override['sensor_calibration']['dark_calibration'] = current_dark_ref
                     
                     # Run full pipeline with segmentation
                     processor.run_full_pipeline(
@@ -1655,6 +1743,23 @@ class HS_preprocessor:
                     if verbose:
                         print(f"\nProcessing: {filename}")
                     
+                    # Auto-detect calibration files if not provided
+                    current_white_ref = white_ref_path
+                    current_dark_ref = dark_ref_path
+                    
+                    if white_ref_path is None or dark_ref_path is None:
+                        auto_white, auto_dark = HS_preprocessor._find_calibration_files(img_path)
+                        
+                        if white_ref_path is None and auto_white:
+                            current_white_ref = auto_white
+                            if verbose:
+                                print(f"  Auto-detected white calibration: {os.path.basename(auto_white)}")
+                        
+                        if dark_ref_path is None and auto_dark:
+                            current_dark_ref = auto_dark
+                            if verbose:
+                                print(f"  Auto-detected dark calibration: {os.path.basename(auto_dark)}")
+                    
                     # Create processor and run pipeline (inherit verbose setting)
                     processor = HS_preprocessor(img_path, verbose=verbose, map_channels=map_channels)
                     
@@ -1686,9 +1791,13 @@ class HS_preprocessor:
                     # Set up config override for external parameters
                     config_override = {}
                     
-                    # Add white reference path to sensor calibration config if provided
-                    if white_ref_path:
-                        config_override['sensor_calibration'] = {'white_ref_path': white_ref_path}
+                    # Add white reference and dark calibration paths to sensor calibration config if provided
+                    if current_white_ref or current_dark_ref:
+                        config_override['sensor_calibration'] = {}
+                        if current_white_ref:
+                            config_override['sensor_calibration']['white_ref_path'] = current_white_ref
+                        if current_dark_ref:
+                            config_override['sensor_calibration']['dark_calibration'] = current_dark_ref
                     
                     processor.run_full_pipeline(
                         config_override=config_override if config_override else None,
@@ -1871,7 +1980,14 @@ class HS_preprocessor:
         return self
     
     def sensor_calibration(self, white_ref_path=None, dark_calibration=False, clip_to=10):
-        """Step 1: Apply white reference calibration (first step - converts raw counts to reflectance)."""
+        """
+        Step 1: Apply white reference calibration (first step - converts raw counts to reflectance).
+        
+        Parameters:
+            white_ref_path (str, optional): Path to white calibration file. If None, auto-detects from image metadata.
+            dark_calibration (str or bool, optional): Path to dark calibration file, or False to skip dark calibration.
+            clip_to (float): Maximum reflectance value for clipping.
+        """
         if self.image is None:
             raise ValueError("No image loaded. Call load_image() first.")
         if self.image.calibrated == True:
