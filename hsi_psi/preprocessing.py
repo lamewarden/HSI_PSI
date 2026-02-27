@@ -1607,6 +1607,21 @@ class HS_preprocessor:
                 apply_segmentation=False
             )
         """
+        # Be tolerant to accidental misuse: allow dict passed via config_path.
+        # In that case treat it as config dictionary and ignore file-loading branch.
+        if isinstance(config_path, dict):
+            if config is None:
+                config = config_path
+            config_path = None
+            if verbose:
+                print("Warning: config_path received a dict; using it as config.")
+
+        if config_path is not None and not isinstance(config_path, (str, os.PathLike)):
+            raise TypeError(
+                "config_path must be a path-like string (or None). "
+                "If you want to pass a configuration dictionary, use the 'config' argument."
+            )
+
         # Load config from file if config_path is provided
         loaded_config = None
         loaded_reference_teflon = None
@@ -1668,6 +1683,30 @@ class HS_preprocessor:
                     filename = os.path.basename(img_path)
                     if verbose:
                         print(f"\nProcessing: {filename}")
+
+                    if empty_config:
+                        processor = HS_preprocessor(img_path, verbose=verbose, map_channels=map_channels)
+                        hs_image = processor.get_current_image()
+                        label = HS_preprocessor._infer_image_label(hs_image, fallback_name=filename, default_label="unknown")
+                        image_df = HS_preprocessor._extract_single_image_all_df(
+                            hs_image,
+                            label_fg=label,
+                            verbose=verbose,
+                            tray_mask=tray_mask
+                        )
+
+                        if not image_df.empty:
+                            extracted_spectra.append(image_df)
+                            if verbose:
+                                print(f"Extracted {len(image_df)} total pixels from {filename}")
+                        else:
+                            if verbose:
+                                print(f"No spectra extracted from {filename}")
+
+                        successful_count += 1
+                        del processor
+                        del hs_image
+                        continue
                     
                     # Auto-detect calibration files if not provided
                     current_white_ref = white_ref_path
@@ -1692,29 +1731,6 @@ class HS_preprocessor:
                     
                     # Create processor and run pipeline (inherit verbose setting)
                     processor = HS_preprocessor(img_path, verbose=verbose, map_channels=map_channels)
-
-                    if empty_config:
-                        hs_image = processor.get_current_image()
-                        label = HS_preprocessor._infer_image_label(hs_image, fallback_name=filename, default_label="unknown")
-                        image_df = HS_preprocessor._extract_single_image_all_df(
-                            hs_image,
-                            label_fg=label,
-                            verbose=verbose,
-                            tray_mask=tray_mask
-                        )
-
-                        if not image_df.empty:
-                            extracted_spectra.append(image_df)
-                            if verbose:
-                                print(f"Extracted {len(image_df)} total pixels from {filename}")
-                        else:
-                            if verbose:
-                                print(f"No spectra extracted from {filename}")
-
-                        successful_count += 1
-                        del processor
-                        del hs_image
-                        continue
                     
                     # Set the processor's config from the loaded/provided configuration
                     if final_config is not None:
@@ -1825,6 +1841,13 @@ class HS_preprocessor:
                     filename = os.path.basename(img_path)
                     if verbose:
                         print(f"\nProcessing: {filename}")
+
+                    if empty_config:
+                        processor = HS_preprocessor(img_path, verbose=verbose, map_channels=map_channels)
+                        results[filename] = processor.get_current_image()
+                        if verbose:
+                            print(f"Loaded raw image: {filename}")
+                        continue
                     
                     # Auto-detect calibration files if not provided
                     current_white_ref = white_ref_path
@@ -1849,12 +1872,6 @@ class HS_preprocessor:
                     
                     # Create processor and run pipeline (inherit verbose setting)
                     processor = HS_preprocessor(img_path, verbose=verbose, map_channels=map_channels)
-
-                    if empty_config:
-                        results[filename] = processor.get_current_image()
-                        if verbose:
-                            print(f"Loaded raw image: {filename}")
-                        continue
                     
                     # Set the processor's config from the loaded/provided configuration
                     if final_config is not None:
