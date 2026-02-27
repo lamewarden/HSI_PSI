@@ -1569,6 +1569,7 @@ class HS_preprocessor:
                                       Method (VI-based or ML-based) determined from config. Default: True
             return_df (bool): If True, return concatenated DataFrame instead of images dict.
                              This processes images one by one to avoid memory overflow.
+                             If config is an empty dict, extracts all pixel spectra (no masking).
             map_channels (dict|list|array, optional): Channel mapping for 6-channel MS images.
                 If None and images have 6 channels, uses default MS_image mapping.
             segmentation_output_dir (str, optional): If provided, saves segmentation masks to this directory.
@@ -1636,6 +1637,12 @@ class HS_preprocessor:
         # Use loaded config/reference if available, otherwise use provided parameters
         final_config = loaded_config if loaded_config is not None else config
         final_reference_teflon = loaded_reference_teflon if loaded_reference_teflon is not None else reference_teflon
+        empty_config = isinstance(final_config, dict) and len(final_config) == 0
+
+        if empty_config and verbose:
+            print("Empty configuration detected: skipping preprocessing pipeline.")
+            print("  return_df=False -> loading raw images into dict")
+            print("  return_df=True  -> extracting all pixel spectra into DataFrame")
         
         # Find all images
         image_paths = glob.glob(os.path.join(folder_path, pattern))
@@ -1685,6 +1692,29 @@ class HS_preprocessor:
                     
                     # Create processor and run pipeline (inherit verbose setting)
                     processor = HS_preprocessor(img_path, verbose=verbose, map_channels=map_channels)
+
+                    if empty_config:
+                        hs_image = processor.get_current_image()
+                        label = HS_preprocessor._infer_image_label(hs_image, fallback_name=filename, default_label="unknown")
+                        image_df = HS_preprocessor._extract_single_image_all_df(
+                            hs_image,
+                            label_fg=label,
+                            verbose=verbose,
+                            tray_mask=tray_mask
+                        )
+
+                        if not image_df.empty:
+                            extracted_spectra.append(image_df)
+                            if verbose:
+                                print(f"Extracted {len(image_df)} total pixels from {filename}")
+                        else:
+                            if verbose:
+                                print(f"No spectra extracted from {filename}")
+
+                        successful_count += 1
+                        del processor
+                        del hs_image
+                        continue
                     
                     # Set the processor's config from the loaded/provided configuration
                     if final_config is not None:
@@ -1819,6 +1849,12 @@ class HS_preprocessor:
                     
                     # Create processor and run pipeline (inherit verbose setting)
                     processor = HS_preprocessor(img_path, verbose=verbose, map_channels=map_channels)
+
+                    if empty_config:
+                        results[filename] = processor.get_current_image()
+                        if verbose:
+                            print(f"Loaded raw image: {filename}")
+                        continue
                     
                     # Set the processor's config from the loaded/provided configuration
                     if final_config is not None:
@@ -2932,6 +2968,40 @@ class HS_preprocessor:
         except Exception as e:
             if verbose:
                 print(f"    Skipping: failed masked extraction ({e})")
+            return pd.DataFrame()
+
+    @staticmethod
+    def _extract_single_image_all_df(hs_image, label_fg="FG", verbose=False, tray_mask=None):
+        """Extract all pixel spectra from a single HS/MS image as DataFrame."""
+        if hs_image is None:
+            return pd.DataFrame()
+
+        try:
+            if not hasattr(hs_image, 'img') or hs_image.img is None:
+                return pd.DataFrame()
+
+            if hs_image.img.ndim != 3:
+                return pd.DataFrame()
+
+            h, w, bands = hs_image.img.shape
+            spectra = hs_image.img.reshape(h * w, bands)
+
+            if not hasattr(hs_image, 'ind') or hs_image.ind is None or len(hs_image.ind) != bands:
+                wavelengths = list(range(bands))
+            else:
+                wavelengths = list(hs_image.ind)
+
+            all_df = pd.DataFrame(spectra, columns=wavelengths)
+            all_df['label'] = label_fg
+            all_df['tray_position'] = ""
+
+            if tray_mask is not None and verbose:
+                print("    Note: tray_mask is ignored when extracting all spectra (empty config mode)")
+
+            return all_df
+        except Exception as e:
+            if verbose:
+                print(f"    Skipping: failed all-spectra extraction ({e})")
             return pd.DataFrame()
 
     @staticmethod
