@@ -1289,7 +1289,9 @@ class HS_preprocessor:
         # Check if input is a directory or list of files
         if isinstance(hs_images, str) and os.path.isdir(hs_images):
             # It's a directory - find all files ending with "Data.hdr"
-            hs_images_list = glob.glob(os.path.join(hs_images, "*Data.hdr"))
+                        # Alternative: using set to avoid duplicates if a file matches both patterns
+            hs_images_list = list(set(glob.glob(os.path.join(hs_images, "*Data.hdr")) + glob.glob(os.path.join(hs_images, "*Scan.hdr"))))
+            hs_images_list.sort()  # Sort for consistent ordering
             if not hs_images_list:
                 raise ValueError(f"No files ending with 'Data.hdr' found in directory: {hs_images}")
             if self.verbose:
