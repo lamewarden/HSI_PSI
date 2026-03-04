@@ -57,7 +57,7 @@ class HS_image:
         self.meta = hdr.metadata
         self.img = hdr.load()
         self.name = os.path.basename(data_path)
-        self.ind = [int(float(x)) for x in self.meta['wavelength'][:-1]]
+        self.ind = [int(float(x)) for x in self.meta['wavelength'] if x.strip() != '']
         self.bits = int(self.meta['data type'])
         
         self.normalized = False
@@ -89,31 +89,31 @@ class HS_image:
         white_cal_wavelengths = np.array(white_calibration.ind)
         
         # Check if wavelength mapping is needed for white calibration
-        if not np.array_equal(white_cal_wavelengths, current_wavelengths):
-            print(f"Mapping white calibration: {white_cal_wavelengths[0]}-{white_cal_wavelengths[-1]} nm → {current_wavelengths[0]}-{current_wavelengths[-1]} nm")
+        # if not np.array_equal(white_cal_wavelengths, current_wavelengths):
+        #     print(f"Mapping white calibration: {white_cal_wavelengths[0]}-{white_cal_wavelengths[-1]} nm → {current_wavelengths[0]}-{current_wavelengths[-1]} nm")
             
-            # Take spatial mean first, then interpolate
-            white_spectrum = np.mean(white_calibration.img, axis=(0, 1))
+        #     # Take spatial mean first, then interpolate
+        #     white_spectrum = np.mean(white_calibration.img, axis=(0, 1))
             
-            # Create interpolation function
-            interp_func = interp1d(
-                white_cal_wavelengths, 
-                white_spectrum, 
-                kind='linear', 
-                bounds_error=False, 
-                fill_value=0  # Use 0 for extrapolated values
-            )
+        #     # Create interpolation function
+        #     interp_func = interp1d(
+        #         white_cal_wavelengths, 
+        #         white_spectrum, 
+        #         kind='linear', 
+        #         bounds_error=False, 
+        #         fill_value=0  # Use 0 for extrapolated values
+        #     )
             
-            # Interpolate to current wavelengths
-            white_matrix = interp_func(current_wavelengths)
+        #     # Interpolate to current wavelengths
+        #     white_matrix = interp_func(current_wavelengths)
             
-            # Ensure we have valid data
-            if np.all(white_matrix == 0):
-                raise ValueError(f"No overlap between white calibration ({white_cal_wavelengths[0]}-{white_cal_wavelengths[-1]} nm) "
-                               f"and current image ({current_wavelengths[0]}-{current_wavelengths[-1]} nm)")
-        else:
+        #     # Ensure we have valid data
+        #     if np.all(white_matrix == 0):
+        #         raise ValueError(f"No overlap between white calibration ({white_cal_wavelengths[0]}-{white_cal_wavelengths[-1]} nm) "
+        #                        f"and current image ({current_wavelengths[0]}-{current_wavelengths[-1]} nm)")
+        # else:
             # Direct spatial mean if wavelengths match
-            white_matrix = np.mean(white_calibration.img, axis=0)
+        white_matrix = np.mean(white_calibration.img, axis=0)
         
         # Handle dark calibration
         if dc:
@@ -149,14 +149,8 @@ class HS_image:
    
 
     def get_closest_wavelength(self, wl):
-        pos = bisect.bisect_left(self.ind, wl)
-        if pos == len(self.ind):
-            return self.ind[-1]
-        if pos == 0:
-            return self.ind[0]
-        if self.ind[pos] == wl:
-            return self.ind[pos]
-        return self.ind[pos]
+        idx = int(np.argmin(np.abs(np.array(self.ind) - wl)))
+        return self.ind[idx]
 
 
     def __getitem__(self, wl):
@@ -738,7 +732,13 @@ class MS_image(HS_image):
         """
         super().__init__(data_path)
         self.devignet_counter = 0
-        self.map_channels(map_channels)
+        # If the header already contains real wavelengths (all >= 200 nm),
+        # trust them and skip the hardcoded channel mapping.
+        # Placeholder indices (e.g. 1,2,3,4,5,6) are all < 200 nm, so we
+        # apply the default physical mapping only in that case.
+        hdr_wls = getattr(self, 'ind', [])
+        if hdr_wls and all(w < 200 for w in hdr_wls):
+            self.map_channels(map_channels)
 
 
     def map_channels(self, target_wavelengths):

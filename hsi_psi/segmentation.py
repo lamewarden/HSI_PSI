@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import List, Dict, Union, Tuple, Optional
 import joblib
 import json
+import pickle
 from datetime import datetime
 
 # Machine learning imports
@@ -99,11 +100,72 @@ class SpectralSegmenter:
         self.best_model = None
         self.study = None
         self.training_data = None
+        self.loaded_masks = None
         self.label_mapping = {}  # Maps class names to numeric labels
         self.reverse_label_mapping = {}  # Maps numeric labels to class names
         
         if not SKLEARN_AVAILABLE:
             warnings.warn("Machine learning features require scikit-learn and optuna")
+
+    def load_annotations(self, filepath: str, images: Optional[List] = None):
+        """
+        Load annotation masks saved by NapariHS_Annotator.save_masks.
+
+        Args:
+            filepath (str): Path to pickle file with saved masks.
+            images (list, optional): Optional image list for count validation.
+
+        Returns:
+            list: List of mask dictionaries in format expected by extract_training_data,
+                  i.e. [{class_name: binary_mask}, ...] ordered by image index.
+        """
+        filepath = Path(filepath)
+
+        with open(filepath, 'rb') as f:
+            data = pickle.load(f)
+
+        if not isinstance(data, dict) or 'masks' not in data:
+            raise ValueError("Invalid mask file format. Expected NapariHS_Annotator saved pickle with 'masks' key.")
+
+        masks_data = data['masks']
+
+        if isinstance(masks_data, dict):
+            masks_list = [masks_data[idx] for idx in sorted(masks_data.keys())]
+        elif isinstance(masks_data, list):
+            masks_list = masks_data
+        else:
+            raise ValueError("Invalid 'masks' structure in file. Expected dict or list.")
+
+        if images is not None and len(images) != len(masks_list):
+            raise ValueError(
+                f"Number of masks in file ({len(masks_list)}) doesn't match number of images ({len(images)}). "
+                "Pass the same image list used for annotation, or load a matching mask file."
+            )
+
+        metadata = data.get('metadata', {}) if isinstance(data, dict) else {}
+        if isinstance(metadata, dict) and 'classes' in metadata:
+            self.class_names = list(metadata['classes'])
+
+        self.loaded_masks = masks_list
+
+        if self.verbose:
+            print("="*60)
+            print(f"LOADED MASKS: {filepath}")
+            print(f"Images in mask file: {len(masks_list)}")
+            if self.class_names:
+                print(f"Classes: {self.class_names}")
+            print("="*60)
+
+        return masks_list
+
+    def load_masks(self, filepath: str, images: Optional[List] = None):
+        """Backward-compatible alias for load_annotations()."""
+        warnings.warn(
+            "SpectralSegmenter.load_masks() is deprecated; use load_annotations() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        return self.load_annotations(filepath=filepath, images=images)
     
     def extract_training_data(
         self, 
@@ -754,7 +816,7 @@ class SpectralSegmenter:
                     # Merge with defaults
                     param_ranges[model_type] = {**default_ranges[model_type], **param_ranges[model_type]}
         
-        # Check number of features and automatically block RF for high-dimensional data
+        # Check number of features and automatically block unsuitable models
         n_features = X_train_sampled.shape[1]
         available_models = ['RandomForest', 'GradientBoosting', 'SVM', 'PCA_RF']
         
@@ -764,6 +826,12 @@ class SpectralSegmenter:
                 print(f"⚠️  RandomForest disabled: Dataset has {n_features} features (>30)")
                 print(f"   Available models: {available_models}")
                 print(f"   Use PCA_RF for dimensionality reduction + RandomForest\n")
+
+        if n_features < 50:
+            available_models.remove('PCA_RF')
+            if self.verbose:
+                print(f"⚠️  PCA_RF disabled: Dataset has {n_features} features (<50)")
+                print(f"   Available models: {available_models}\n")
         
         def objective(trial):
             """Optuna objective function."""
