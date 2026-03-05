@@ -308,7 +308,23 @@ class SpectralSegmenter:
             print(f"{'='*60}")
         
         return self
-    
+
+    # ------------------------------------------------------------------
+    def _minmax_scale_rows(self, x: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+        """Min-max scale each spectrum (row) independently to [0, 1]."""
+        arr = np.asarray(x, dtype=np.float64)
+        if arr.ndim == 1:
+            arr = arr[None, :]
+            squeeze_back = True
+        else:
+            squeeze_back = False
+        row_min = arr.min(axis=1, keepdims=True)
+        row_max = arr.max(axis=1, keepdims=True)
+        denom = np.maximum(row_max - row_min, eps)
+        scaled = (arr - row_min) / denom
+        return scaled[0] if squeeze_back else scaled
+    # ------------------------------------------------------------------
+
     def visualize_spectra(
         self,
         show_mean=True,
@@ -317,7 +333,8 @@ class SpectralSegmenter:
         show_violins=False,
         n_individual_samples=100,
         n_boxplot_features=8,
-        figsize=(16, 5)
+        figsize=(16, 5),
+        minmax_viz=False
     ):
         """
         Visualize spectral signatures by class.
@@ -330,6 +347,7 @@ class SpectralSegmenter:
             n_individual_samples (int): Number of individual spectra to plot
             n_boxplot_features (int): Number of features for boxplots
             figsize (tuple): Figure size for plots
+            minmax_viz (bool): If True, min-max scale each spectrum to [0, 1] per sample before visualizing
             
         Returns:
             dict: Dictionary with mean spectra and statistics
@@ -344,7 +362,13 @@ class SpectralSegmenter:
             class_label = self.label_mapping[class_name]
             mask = self.training_data['label'] == class_label
             class_data = self.training_data[mask].drop(['label', 'class_name'], axis=1)
-            
+            if minmax_viz:
+                class_data = pd.DataFrame(
+                    self._minmax_scale_rows(class_data.values),
+                    columns=class_data.columns,
+                    index=class_data.index
+                )
+
             results[class_name] = {
                 'mean': class_data.mean(axis=0).values,
                 'std': class_data.std(axis=0).values,
@@ -370,7 +394,7 @@ class SpectralSegmenter:
                                color=colors[i], alpha=0.2)
             
             ax.set_xlabel('Wavelength (nm)', fontsize=12)
-            ax.set_ylabel('Reflectance', fontsize=12)
+            ax.set_ylabel('Reflectance (min-max scaled)' if minmax_viz else 'Reflectance', fontsize=12)
             ax.set_title('Mean Spectral Signatures ± 1 Std Dev', fontsize=14, fontweight='bold')
             ax.legend(fontsize=11)
             ax.grid(True, alpha=0.3)
@@ -387,7 +411,13 @@ class SpectralSegmenter:
                 class_label = self.label_mapping[class_name]
                 mask = self.training_data['label'] == class_label
                 class_data = self.training_data[mask].drop(['label', 'class_name'], axis=1)
-                
+                if minmax_viz:
+                    class_data = pd.DataFrame(
+                        self._minmax_scale_rows(class_data.values),
+                        columns=class_data.columns,
+                        index=class_data.index
+                    )
+
                 n_samples = min(n_individual_samples, len(class_data))
                 sample_indices = np.random.choice(len(class_data), n_samples, replace=False)
                 
@@ -401,7 +431,7 @@ class SpectralSegmenter:
                        color=colors[i], linewidth=2.5, label=class_name)
             
             ax.set_xlabel('Wavelength (nm)', fontsize=12)
-            ax.set_ylabel('Reflectance', fontsize=12)
+            ax.set_ylabel('Reflectance (min-max scaled)' if minmax_viz else 'Reflectance', fontsize=12)
             ax.set_title(f'Individual Spectra (showing {n_individual_samples} samples per class)', 
                         fontsize=14, fontweight='bold')
             ax.legend(fontsize=11)
@@ -431,8 +461,13 @@ class SpectralSegmenter:
                 for class_name in self.class_names:
                     class_label = self.label_mapping[class_name]
                     mask = self.training_data['label'] == class_label
-                    class_data = self.training_data[mask].iloc[:, wl_idx]
-                    data_to_plot.append(class_data.values)
+                    if minmax_viz:
+                        full_data = self.training_data[mask].drop(['label', 'class_name'], axis=1)
+                        scaled = self._minmax_scale_rows(full_data.values)
+                        col_values = scaled[:, wl_idx]
+                    else:
+                        col_values = self.training_data[mask].iloc[:, wl_idx].values
+                    data_to_plot.append(col_values)
                     labels.append(class_name)
                 
                 bp = axes[plot_idx].boxplot(data_to_plot, labels=labels, patch_artist=True, widths=0.6)
@@ -444,7 +479,7 @@ class SpectralSegmenter:
                 for median in bp['medians']:
                     median.set(color='black', linewidth=2)
                 
-                axes[plot_idx].set_ylabel('Reflectance', fontsize=10)
+                axes[plot_idx].set_ylabel('Reflectance (min-max scaled)' if minmax_viz else 'Reflectance', fontsize=10)
                 axes[plot_idx].set_title(f'{wl:.1f} nm\nΔ = {diff[wl_idx]:.4f}', 
                                         fontsize=11, fontweight='bold')
                 axes[plot_idx].grid(True, alpha=0.3, axis='y')
@@ -474,7 +509,13 @@ class SpectralSegmenter:
                 class_label = self.label_mapping[class_name]
                 mask = self.training_data['label'] == class_label
                 class_data = self.training_data[mask].drop(['label', 'class_name'], axis=1)
-                
+                if minmax_viz:
+                    class_data = pd.DataFrame(
+                        self._minmax_scale_rows(class_data.values),
+                        columns=class_data.columns,
+                        index=class_data.index
+                    )
+
                 data_to_plot = [class_data.iloc[:, idx].values for idx in indices_sorted]
                 positions = np.arange(len(indices_sorted)) + positions_offset[i]
                 
@@ -495,7 +536,7 @@ class SpectralSegmenter:
             ax.set_xticks(np.arange(len(indices_sorted)))
             ax.set_xticklabels([f'{self.wavelengths[idx]:.0f}' for idx in indices_sorted], rotation=45)
             ax.set_xlabel('Wavelength (nm)', fontsize=12)
-            ax.set_ylabel('Reflectance', fontsize=12)
+            ax.set_ylabel('Reflectance (min-max scaled)' if minmax_viz else 'Reflectance', fontsize=12)
             ax.set_title('Reflectance Distribution Across Wavelengths (Violin Plots)', 
                         fontsize=14, fontweight='bold')
             

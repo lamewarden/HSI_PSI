@@ -686,20 +686,14 @@ class HS_preprocessor:
                     traceback.print_exc()
                 raise RuntimeError(error_msg) from e
         
-        # Apply segmentation as final step if requested
-        if apply_segmentation:
+        # Apply segmentation as final step ONLY if mask_extraction is in config AND requested
+        if apply_segmentation and 'mask_extraction' in pipeline_config:
             if self.verbose:
                 print(f"🌿 Final step: mask_extraction...")
             
             try:
                 # Get mask extraction parameters from config (with overrides applied)
                 mask_config = pipeline_config.get('mask_extraction', {})
-                
-                # If no mask_extraction in config, use default threshold-based method
-                if not mask_config:
-                    if self.verbose:
-                        print(f"   ℹ️  No mask_extraction config found, using default vegetation indices")
-                    mask_config = {'method': 'thresholds'}
                 
                 # Determine method from config
                 method = mask_config.get('method', 'thresholds')
@@ -779,9 +773,12 @@ class HS_preprocessor:
                 raise RuntimeError(error_msg) from e
         
         if self.verbose:
-            total_steps = len(pipeline_steps) + (1 if apply_segmentation else 0)
+            ran_segmentation = apply_segmentation and 'mask_extraction' in pipeline_config
+            if not ran_segmentation and apply_segmentation:
+                print(f"ℹ️  mask_extraction not in config — skipped (no mask produced)")
+            total_steps = len(pipeline_steps) + (1 if ran_segmentation else 0)
             print(f"✅ Pipeline completed successfully! ({total_steps} steps executed)")
-            if apply_segmentation and hasattr(self.image, 'mask'):
+            if ran_segmentation and hasattr(self.image, 'mask'):
                 print(f"🎭 Mask stored in image.mask attribute")
             
         return self
