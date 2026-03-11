@@ -2956,8 +2956,11 @@ class HS_preprocessor:
                     wavelengths = data["wavelengths"]
                     color = colors[i]
                     
-                    ax2.plot(wavelengths, spectrum, color=color, label=roi_name, linewidth=2)
-                
+                    if wavelengths.shape[0] < 100:
+                        ax2.plot(wavelengths, spectrum, color=color, label=roi_name, linestyle='none', marker='.', markersize=10)
+                    else:
+                        ax2.plot(wavelengths, spectrum, color=color, label=roi_name, linewidth=2)
+
                 ax2.set_xlabel('Wavelength (nm)')
                 ax2.set_ylabel('Reflectance')
                 ax2.set_title('Spectra from ROIs')
