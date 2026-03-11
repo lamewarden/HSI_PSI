@@ -46,6 +46,15 @@ class HS_image:
 
 
     def read_hdr(self, data_path):
+        """Load image data and metadata from an ENVI .hdr file.
+
+        Handles both native ENVI format and custom BIL headers (auto-converting
+        the latter via convert_header_to_envi). Populates rows, cols, bands,
+        meta, img, ind, bits, normalized, and calibrated.
+
+        Args:
+            data_path (str): Path to the .hdr file.
+        """
         try:
             hdr = sp.open_image(data_path)
         except:
@@ -69,6 +78,14 @@ class HS_image:
         return str(self.name)
 
     def calibrate(self, dc=False, clip_to=3):
+        """Apply white (and optionally dark) calibration to convert raw DN to reflectance.
+
+        Result is clipped to [0, clip_to]; NaN and Inf values are zeroed or clamped.
+
+        Args:
+            dc (bool): If True, also loads and subtracts a dark current image. Default: False.
+            clip_to (float): Upper bound for clipping after calibration. Default: 3.
+        """
         white_matrix, dark_matrix = self.upload_calibration(dc)
         # limiting the height of the reflectance
         self.img = np.clip((self.img - dark_matrix) / (white_matrix - dark_matrix), 0, clip_to)
@@ -149,11 +166,31 @@ class HS_image:
    
 
     def get_closest_wavelength(self, wl):
+        """Return the wavelength in self.ind nearest to wl.
+
+        Args:
+            wl (int | float): Target wavelength in nm.
+
+        Returns:
+            int: Closest available wavelength from self.ind.
+        """
         idx = int(np.argmin(np.abs(np.array(self.ind) - wl)))
         return self.ind[idx]
 
 
     def __getitem__(self, wl):
+        """Return a band slice for a given wavelength or wavelength slice.
+
+        Single wavelength: silently maps to the nearest band in self.ind.
+        Slice: returns self.img[:, :, start_idx:stop_idx:step].
+
+        Args:
+            wl (int | float | slice): Wavelength in nm, or a slice of wavelengths.
+
+        Returns:
+            np.ndarray: Shape (rows, cols) for a single wavelength, or
+                        (rows, cols, n_bands) for a slice.
+        """
         if isinstance(wl, slice):
             # Handle slice of wavelengths
             start, stop, step = wl.start, wl.stop, wl.step
@@ -175,6 +212,15 @@ class HS_image:
     
         
     def __setitem__(self, wl, value):
+        """Overwrite the band at an exact wavelength.
+
+        Args:
+            wl (int | float): Exact wavelength to overwrite. Must exist in self.ind.
+            value (np.ndarray): 2D (rows, cols) array to assign.
+
+        Raises:
+            IndexError: If wl is not present in self.ind.
+        """
         wl = int(float(wl))
         try:
             wl_index = self.ind.index(wl)
@@ -237,8 +283,19 @@ class HS_image:
         return result
         
     @staticmethod
-    def img_align(img, template, inplace = False):
+    def img_align(img, template, inplace=False):
+        """Align img to template using SIFT keypoints, FLANN matching, and RANSAC homography.
 
+        Args:
+            img (np.ndarray): Image to be aligned.
+            template (np.ndarray): Reference image to align to.
+            inplace (bool): If True, warps img into the template frame in-place.
+                            Default: False.
+
+        Returns:
+            tuple: (M, width, height) where M is the 3x3 homography matrix.
+                   Returns an identity matrix if fewer than 10 feature matches are found.
+        """
         sift = cv2.SIFT_create()
         template_bw = cv2.normalize(template, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
         img_bw = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
@@ -276,7 +333,16 @@ class HS_image:
     
 
 
-    def normalize(self, to_wl = 1000, clip_to = 3):
+    def normalize(self, to_wl=1000, clip_to=3):
+        """Divide every band by the band at to_wl (band-ratio normalization).
+
+        Guards against double normalization: subsequent calls are no-ops.
+        NaN and Inf values produced by the division are zeroed.
+
+        Args:
+            to_wl (int): Reference wavelength used as denominator. Default: 1000 nm.
+            clip_to (float): Upper bound applied after normalization. Default: 3.
+        """
         if self.normalized == True:
             print("HS image is already normalized. No new transformation will be performed")
         else:
@@ -307,6 +373,16 @@ class HS_image:
         self.img = snv_image.reshape(self.img.shape)
 
     def apply_rnv(self, eps=1e-8, nan_safe=True):
+        """Apply Robust Normal Variate (RNV) transformation in-place.
+
+        Centers each pixel spectrum by its median and scales by 1.4826 * MAD,
+        providing an outlier-robust analogue to SNV. Pixels with near-zero MAD
+        are left with only the median subtraction (no scale blow-up).
+
+        Args:
+            eps (float): Minimum scale denominator to avoid division by zero. Default: 1e-8.
+            nan_safe (bool): Use np.nanmedian to handle NaN values. Default: True.
+        """
         # Expect self.img shape (H, W, B)
         img = self.img.astype(np.float32, copy=False)
         flat = img.reshape(-1, img.shape[-1])  # (N_pixels, B)
@@ -525,10 +601,14 @@ class HS_image:
             traceback.print_exc()
     
     def flatten_to_df(self):
+        """Flatten the hyperspectral image to a 2D DataFrame (non-zero pixels only).
+
+        Each row is a pixel spectrum; columns are wavelengths from self.ind.
+        Pixels whose mean across all bands is zero are excluded.
+
+        Returns:
+            pd.DataFrame: Shape (n_nonzero_pixels, n_bands) with wavelengths as columns.
         """
-        Flattenting whole HS image into 2D DF with separate pixels as rows and WL as columns.
-        
-        """               
         return pd.DataFrame(self.img[self.img.mean(axis=2) != 0], columns=self.ind)
 
     def _get_mask_2d(self):
@@ -781,8 +861,19 @@ class MS_image(HS_image):
 
 
     def devignet(self, ref_HS, sigma=10, deblack=False, black_noise=0.0586):
-    # Extracting de-vignetting matrix from ref images:
-    # Gaussian blur application
+        """Apply vignetting correction in-place using a reference multispectral image.
+
+        Computes a per-channel correction matrix from ref_HS (Gaussian-blur the
+        reference, invert it, normalize by mean), then multiplies each channel of
+        self by that matrix. Runs only once per instance: sets devignet_counter=1
+        on first call; subsequent calls return immediately.
+
+        Args:
+            ref_HS (MS_image): Reference uniform-surface (e.g. teflon) image.
+            sigma (float): Gaussian blur sigma for smoothing the reference. Default: 10.
+            deblack (bool): If True, also subtracts a black-noise offset. Default: False.
+            black_noise (float): Black noise as a fraction of 4095 counts. Default: 0.0586.
+        """
         if self.devignet_counter == 1:
             return
         
@@ -870,6 +961,14 @@ def standardize_image(image: np.ndarray) -> np.ndarray:
     return standardized_image
 
 def convert_header_to_envi(bil_header):
+    """Convert a custom BIL-format header to a valid ENVI-format header in-place.
+
+    The original header is backed up with an '_original' suffix before conversion.
+    Handles NBITS 12, 16, 32, and 64; maps BYTEORDER to ENVI byte-order values.
+
+    Args:
+        bil_header (str): Path to the BIL .hdr file to convert.
+    """
     # Open the BIL header file and read its lines
     with open(bil_header, 'r') as f:
         lines = f.readlines()

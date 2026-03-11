@@ -2586,6 +2586,27 @@ class HS_preprocessor:
         return cleaned, mask
     
     def normalization(self, to_wl=751, clip_to=10, method="to_wl"):
+        """Normalize the loaded image using the specified spectral normalization method.
+
+        Skips silently if the image has already been normalized.
+
+        Args:
+            to_wl (int): Reference wavelength for 'to_wl' method. Default: 751 nm.
+            clip_to (float): Upper clip bound applied after 'to_wl' normalization. Default: 10.
+            method (str): Normalization method — one of 'to_wl', 'snv', 'rnv', 'l2'.
+                - 'to_wl': Band-ratio normalization by the band at to_wl.
+                - 'snv': Standard Normal Variate (per-pixel zero-mean, unit-std).
+                - 'rnv': Robust Normal Variate (median/MAD scaling).
+                - 'l2': L2 (Euclidean) norm scaling per pixel.
+                Default: 'to_wl'.
+
+        Returns:
+            self: For method chaining.
+
+        Raises:
+            ValueError: If no image is loaded, to_wl is None with method='to_wl',
+                        or an unknown method is given.
+        """
 
         if self.image is None:
             raise ValueError("No image loaded.")
@@ -2836,16 +2857,34 @@ class HS_preprocessor:
         )
     
     def spectrum_probe(
-            self, 
-            normalize=True, 
-            correct=False, 
-            show=True, 
-            title='RGB Sample', 
-            axes=False, 
-            repeat=1, 
+            self,
+            normalize=True,
+            correct=False,
+            show=True,
+            title='RGB Sample',
+            axes=False,
+            repeat=1,
             rois=None,
             figure_size=(8, 6)):
-        
+        """Extract and optionally display mean spectra from one or more spatial ROIs.
+
+        Args:
+            normalize (bool): Normalize the RGB thumbnail before display. Default: True.
+            correct (bool): Apply outlier correction to the RGB thumbnail. Default: False.
+            show (bool): Display an RGB image with overlaid ROI boxes and spectrum plot.
+                Default: True.
+            title (str): Figure title. Default: 'RGB Sample'.
+            axes (bool): Show axis tick marks on the RGB panel. Default: False.
+            repeat (int): Vertical repetition factor for the RGB thumbnail. Default: 1.
+            rois (dict | None): Mapping of {roi_name: (row_slice, col_slice)} defining
+                spatial regions to probe. If None, only the RGB image is shown.
+            figure_size (tuple): (width, height) of the figure in inches. Default: (8, 6).
+
+        Returns:
+            dict | None: When rois is provided, returns
+                {roi_name: {'spectrum': np.ndarray, 'wavelengths': np.ndarray, 'roi': slices}}.
+                Returns None when rois is None.
+        """
         rgb_img = self.get_rgb_sample(normalize=normalize, correct=correct, repeat=repeat, show=False)
         if rois is not None:
             probed_spectra = {}

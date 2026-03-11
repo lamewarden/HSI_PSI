@@ -464,9 +464,6 @@ def create_config_template() -> Dict[str, Any]:
     return template
 
 
-# utils.py
-import numpy as np
-
 try:
     from scipy.signal import savgol_filter
     _HAS_SG = True
@@ -475,9 +472,21 @@ except Exception:
 
 
 def _extract_cube_and_meta(hs_image, mask=None):
-    """
-    Best-effort extractor for HSI_PSI.HS_image-like objects.
-    Expects a spectral cube shaped (H, W, B).
+    """Extract the spectral cube, wavelength array, and spatial mask from an HS_image.
+
+    Tries common attribute names in priority order (.img first per HSI_PSI convention).
+    If no mask is found, returns an all-True mask covering the full spatial extent.
+
+    Args:
+        hs_image: Object with a (H, W, B) spectral cube.
+        mask (np.ndarray, optional): (H, W) boolean mask. If None, attempts to
+            read from hs_image.mask / .roi_mask / .valid_mask.
+
+    Returns:
+        tuple: (cube np.ndarray (H,W,B), wavelengths np.ndarray|None, mask np.ndarray (H,W)).
+
+    Raises:
+        ValueError: If no 3D array attribute is found on hs_image.
     """
     # cube - check for .img first (HSI_PSI convention)
     cube = None
@@ -686,7 +695,7 @@ def print_package_info() -> None:
     print("=" * 60)
     print("HSI_PSI - Hyperspectral Image Processing Package")
     print("=" * 60)
-    print(f"Version: 0.2.0")
+    print(f"Version: 0.4.0")
     print(f"Python: {sys.version.split()[0]}")
     print(f"Platform: {platform.system()} {platform.release()}")
     print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -812,6 +821,13 @@ def plot_spectra(spectra_dicts_list, dict_names=None, scale=False,
     plt.show()
 
 def vis_clust_2D(X, pc_to_visualize):
+    """Scatter plot of two principal components coloured by class label.
+
+    Args:
+        X (pd.DataFrame): DataFrame with a 'label' column and numeric PC columns.
+        pc_to_visualize (tuple[int, int]): Column indices (0-based) of the two
+            components to plot on the x- and y-axes respectively.
+    """
     fig, ax = plt.subplots(figsize=(10, 8))
 
     # Map unique labels to integer values to color them

@@ -7,9 +7,27 @@ from scipy import linalg
 from scipy.ndimage import median_filter
 
 class transformer:
-    """
-    Generic hyperspectral dimensionality reduction transformer.
-    Supports PCA and MNF (Minimum Noise Fraction) transformations.
+    """Generic hyperspectral dimensionality reduction transformer.
+
+    Supports PCA (via scikit-learn) and MNF (Minimum Noise Fraction, implemented
+    internally using generalized eigenvalue decomposition with Cholesky whitening).
+
+    After fitting, the following state attributes are populated (uninitialised
+    attributes remain None until fit() is called):
+
+    PCA mode:
+        transformer_obj: fitted sklearn.decomposition.PCA object.
+
+    MNF mode:
+        mnf_mean_      : per-band mean for centering, shape (n_bands,).
+        mnf_components_: projection matrix, shape (n_bands, n_components).
+        eigenvalues_   : signal-to-noise eigenvalues, shape (n_components,).
+        signal_cov_    : signal covariance matrix, shape (n_bands, n_bands).
+
+    Shared after fitting:
+        fitted          : True once fit() or fit_transform() has been called.
+        n_components    : number of retained components.
+        original_shape  : (n_bands, height, width) stored by HSI_to_X().
     """
 
     def __init__(self, method='pca'):
@@ -142,15 +160,21 @@ class transformer:
         return noise_cov
 
     def fit(self, X, n_components):
-        """
-        Fit the transformer to the data.
-        
-        Parameters:
-        -----------
-        X : numpy.ndarray
-            Input data matrix (n_pixels, n_bands)
+        """Fit the transformer to the data.
+
+        PCA: delegates to sklearn's PCA, storing result in transformer_obj.
+
+        MNF: estimates signal and noise covariance matrices, then solves the
+        generalized eigenvalue problem via Cholesky whitening (falls back to
+        regularised eigh if Cholesky decomposition fails). After fitting stores
+        mnf_mean_, mnf_components_, eigenvalues_, and signal_cov_.
+
+        Parameters
+        ----------
+        X : np.ndarray, shape (n_pixels, n_bands)
+            Input data matrix, typically produced by HSI_to_X().
         n_components : int
-            Number of components to retain
+            Number of components to retain.
         """
         self.n_components = n_components
         
