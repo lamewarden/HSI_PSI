@@ -76,8 +76,8 @@ def compare_pca_mnf():
     pca_trans.fit(X_pca, n_components)
     X_pca_transformed = pca_trans.transform(X_pca)
     
-    print(f"PCA - Explained variance ratios: {pca_trans.pca_obj.explained_variance_ratio_[:n_components]}")
-    print(f"PCA - Total variance explained: {pca_trans.pca_obj.explained_variance_ratio_[:n_components].sum():.3f}")
+    print(f"PCA - Explained variance ratios: {pca_trans.get_explained_variance_ratio()[:n_components]}")
+    print(f"PCA - Total variance explained: {pca_trans.get_explained_variance_ratio()[:n_components].sum():.3f}")
     
     # Test MNF
     print("\n--- MNF Transformation ---")
