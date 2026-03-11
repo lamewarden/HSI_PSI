@@ -123,9 +123,9 @@ def analyze_mnf_components():
     noise_cov = mnf_trans._estimate_noise_covariance(X)
     signal_cov = np.cov(X.T)
     
-    noise_eigenvals = linalg.eigvals(noise_cov)
-    signal_eigenvals = linalg.eigvals(signal_cov)
-    
+    noise_eigenvals = np.linalg.eigvals(noise_cov)
+    signal_eigenvals = np.linalg.eigvals(signal_cov)
+
     print(f"Noise cov eigenvalue range: [{noise_eigenvals.min():.6f}, {noise_eigenvals.max():.6f}]")
     print(f"Signal cov eigenvalue range: [{signal_eigenvals.min():.6f}, {signal_eigenvals.max():.6f}]")
     print(f"Noise cov condition number: {np.linalg.cond(noise_cov):.2e}")
@@ -139,6 +139,4 @@ def analyze_mnf_components():
     print(f"Signal-to-noise ratio: {signal_power / noise_power:.2f}")
 
 if __name__ == "__main__":
-    # Import scipy.linalg for the analysis
-    from scipy import linalg
     analyze_mnf_components()
