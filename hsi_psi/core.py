@@ -805,36 +805,7 @@ class MS_image(HS_image):
                 self[channel] = np.clip((self[channel] * ref_frame), 0, 4095).astype(np.uint16)
         
         self.devignet_counter = 1
-        return 
-    
-
-    
-    def devignet_old_school(self, ref_HS, sigma=10, deblack = False, black_noise = 0.0586):
-        # extracting de-vignetting matrix from ref images:
-        # gaussian blur application
-        if self.devignet_counter == 1:
-            return ref_HS
-        
-        ref_HS_copy = copy.deepcopy(ref_HS)
-        # ref_list = []
-        for channel in range(0,6):
-            # gaussian blur
-            ref_HS_copy.img[:,:,channel] = cv2.GaussianBlur(ref_HS_copy.img[:,:,channel] , (3, 3), sigmaX=sigma)
-            # inverting 
-            ref_HS_copy.img[:,:,channel]  = 1/ref_HS_copy.img[:,:,channel] 
-            # dividing by mean
-            ref_HS_copy.img[:,:,channel]  = ref_HS_copy.img[:,:,channel] /np.mean(ref_HS_copy.img[:,:,channel] )
-            # ref_list.append(ref_HS_copy.img[channel])
-        # Plying calculated de-vignetting mask for the every image in the original TS:
-            if deblack is True:
-                self.img[:,:,channel]  = np.clip((self.img[:,:,channel]  * ref_HS_copy.img[:,:,channel][:,:,np.newaxis] - 4095*black_noise), 0, 4095).astype(np.uint16) 
-            else:
-                self.img[:,:,channel] = np.clip((self.img[:,:,channel] * ref_HS_copy.img[:,:,channel][:,:,np.newaxis]), 0, 4095).astype(np.uint16)
-        self.devignet_counter = 1
-
-
-        return ref_HS_copy
-
+        return
 
 
 def get_polygon_masks_from_json(json_file_path):
