@@ -542,14 +542,11 @@ class HS_image:
         if self.img.ndim != 3:
             raise ValueError(f"Image must be 3D (H, W, B), got shape {self.img.shape}")
 
-        _, _, bands = self.img.shape
         mask = self.mask
 
         if mask.ndim == 3:
             if mask.shape[2] == 1:
                 mask_2d = mask[:, :, 0].astype(bool)
-            elif mask.shape[2] == bands:
-                mask_2d = np.any(mask, axis=2)
             else:
                 mask_2d = np.any(mask != 0, axis=2)
         elif mask.ndim == 2:
