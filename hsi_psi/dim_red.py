@@ -31,15 +31,13 @@ class transformer:
         self.n_components = None
         self.original_shape = None
         
-        # Method-specific attributes
-        if self.method == 'pca':
-            self.transformer_obj = None
-        elif self.method == 'mnf':
-            self.mean_ = None
-            self.eigenvalues_ = None
-            self.eigenvectors_ = None
-            self.noise_cov_ = None
-            self.signal_cov_ = None
+        # All state attributes initialized regardless of method so attribute
+        # access is always safe (returns None rather than AttributeError).
+        self.transformer_obj = None      # PCA: sklearn PCA object
+        self.mnf_mean_ = None            # MNF: per-band mean used for centering
+        self.mnf_components_ = None      # MNF: (n_bands, n_components) projection matrix
+        self.eigenvalues_ = None         # MNF: signal-to-noise eigenvalues
+        self.signal_cov_ = None          # MNF: signal covariance (needed for explained variance)
     
 
     def HSI_to_X(self, HSI_image, drop_nulls=False):
@@ -170,6 +168,7 @@ class transformer:
             
             # Estimate signal and noise covariance matrices on centered data
             signal_cov = np.cov(X_centered.T)  # Signal covariance
+            self.signal_cov_ = signal_cov       # Store for explained variance calculation
             
             # Try alternative noise estimation: minimum eigenvalue method
             eigenvals_signal = linalg.eigvals(signal_cov)
@@ -370,10 +369,13 @@ class transformer:
         if self.method == 'pca':
             return self.transformer_obj.explained_variance_ratio_
         elif self.method == 'mnf':
-            # For MNF, return normalized signal-to-noise ratios
-            if self.eigenvalues_ is not None and len(self.eigenvalues_) > 0:
-                total_snr = np.sum(self.eigenvalues_)
-                return self.eigenvalues_ / total_snr if total_snr > 0 else self.eigenvalues_
+            # Compute variance-based explained ratio comparable to PCA's formula:
+            #   variance captured by component i = v_i.T @ signal_cov @ v_i
+            #   ratio = component variance / total variance (trace of signal_cov)
+            if self.mnf_components_ is not None and self.signal_cov_ is not None:
+                comp_vars = np.diag(self.mnf_components_.T @ self.signal_cov_ @ self.mnf_components_)
+                total_var = np.trace(self.signal_cov_)
+                return comp_vars / total_var if total_var > 0 else comp_vars
         return None
     
     def get_method_info(self):
@@ -396,6 +398,9 @@ class transformer:
                 info['explained_variance_ratio'] = self.get_explained_variance_ratio()
                 info['total_explained_variance'] = np.sum(self.get_explained_variance_ratio())
             elif self.method == 'mnf':
+                evr = self.get_explained_variance_ratio()
+                info['explained_variance_ratio'] = evr
+                info['total_explained_variance'] = np.sum(evr) if evr is not None else None
                 info['signal_to_noise_ratios'] = self.eigenvalues_
                 info['mean_snr'] = np.mean(self.eigenvalues_) if self.eigenvalues_ is not None else None
         
