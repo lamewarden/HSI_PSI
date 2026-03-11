@@ -189,28 +189,6 @@ processed_image = processor.get_current_image()
 rgb = processor.get_rgb_sample(show=True)
 ```
 
-### Noise Analysis (NEW)
-
-```python
-from hsi_psi import rank_noisy_bands, summarize_noisiest_bands
-
-# Load and preprocess image
-processor = HS_preprocessor("data/noisy_image.hdr")
-processor.sensor_calibration(white_ref_path="cal/white.hdr")
-
-# Analyze spectral noise
-noise_ranking = rank_noisy_bands(processor.image, 
-                                method='savgol_residuals',
-                                window_length=7, 
-                                polyorder=2)
-
-# Get summary of noisiest bands
-summary = summarize_noisiest_bands(noise_ranking, top_n=10)
-print("Top 10 noisiest bands:")
-for band_info in summary['top_noisy_bands']:
-    print(f"Band {band_info['band_idx']} ({band_info['wavelength']} nm): "
-          f"noise score = {band_info['noise_score']:.4f}")
-```
 
 ### Reference Teflon Library with Wavelength Mapping (ENHANCED)
 
@@ -394,17 +372,6 @@ hsi_psi/
 ├── utils.py             # Utility functions with noise analysis
 └── README.md           # This file
 ```
-
-## Available Spectral Indices
-
-- **NDVI**: Normalized Difference Vegetation Index
-- **PRI**: Photochemical Reflectance Index  
-- **HBSI**: Hyperspectral Blue Spectral Index
-- **EVI**: Enhanced Vegetation Index
-- **SAVI**: Soil-Adjusted Vegetation Index
-- **GNDVI**: Green NDVI
-- **ARI**: Anthocyanin Reflectance Index
-- **CRI**: Carotenoid Reflectance Index
 
 ## New Utility Functions
 
