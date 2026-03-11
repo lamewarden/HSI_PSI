@@ -1,118 +1,109 @@
-# HSI_PSI - Advanced Hyperspectral Image Analysis Library
+﻿# HSI_PSI — Hyperspectral Image Analysis Library
 
-**HSI_PSI** is a comprehensive Python library for hyperspectral image analysis, designed with simplicity, flexibility, and reproducibility in mind. Built specifically for close-range vegetation monitoring and agricultural applications, it provides advanced hyperspectral data manipulation methods packed into self-explanatory functions based on real-world HSI processing experience.
+**HSI_PSI** is a Python library for hyperspectral image analysis, designed with simplicity, flexibility, and reproducibility in mind. Built for close-range vegetation monitoring and agricultural applications, it covers the full pipeline from raw data loading to supervised segmentation.
 
 ## What HSI_PSI Can Do
 
-HSI_PSI empowers researchers and practitioners to:
-
-- **Load & Handle Data**: Seamlessly work with hyperspectral images from PSI VNIR/SWIR/MSC cameras
-- **Process Efficiently**: Apply sophisticated preprocessing pipelines with optimized step ordering
-- **Flexible Spectral Processing**: Intelligent wavelength mapping handles different sensor configurations automatically
+- **Load & Handle Data**: Work with hyperspectral and multispectral images from PSI VNIR/SWIR/MSC cameras
+- **Preprocess**: Run full preprocessing pipelines (calibration, spike removal, spectral cropping, solar correction, smoothing, normalization)
+- **Reduce Dimensionality**: Apply PCA or MNF (Minimum Noise Fraction) transformations
+- **Annotate Interactively**: Label image regions using an integrated Napari-based annotation tool
+- **Segment Automatically**: Train and deploy ML classifiers for automated pixel-level segmentation
 - **Extract Information**: Generate vegetation masks and calculate spectral indices (NDVI, PRI, HBSI, EVI, and more)
-- **Spectral Range Cropping**: Focus processing on relevant wavelength ranges
-- **Noise Analysis**: Advanced spectral noise detection and ranking capabilities
-- **Save Configurations**: Store and reuse preprocessing settings for reproducible workflows
-- **Visualize Results**: Create RGB representations and interactive spectral plots including the new plot_spectra function
+- **Visualize**: Create RGB representations, interactive spectral plots, and segmentation overlays
 - **Batch Process**: Handle entire folders of hyperspectral images with consistent preprocessing
+- **Save Configurations**: Store and reuse preprocessing settings for reproducible workflows
 
 ## Package Architecture
 
-HSI_PSI consists of three core modules, each designed for specific aspects of hyperspectral analysis:
+```
+hsi_psi/
+├── __init__.py       # Main imports and version info
+├── core.py           # HS_image and MS_image base classes
+├── preprocessing.py  # HS_preprocessor with full pipeline and batch processing
+├── dim_red.py        # transformer class (PCA and MNF)
+├── annotation.py     # NapariHS_Annotator (requires napari)
+├── segmentation.py   # SpectralSegmenter (requires scikit-learn, optuna)
+└── utils.py          # Utility functions
+```
 
 ### Core Module (`core.py`)
-The foundation of HSI_PSI, providing:
-- `HS_image` and `MS_image` classes for advanced data handling
-- **NEW**: `crop_spectral_range()` method for wavelength selection
-- **Enhanced**: Intelligent wavelength mapping for calibration compatibility
-- Image loading with automatic format conversion
-- Spectral band access with wavelength indexing
-- RGB extraction and visualization tools
-- Data standardization and format conversion
+Provides the foundational data classes:
+- `HS_image` — loads and handles hyperspectral images (HDR/ENVI format)
+  - Wavelength-indexed band access (`image[670]`)
+  - Sensor calibration (dark & white reference)
+  - Spectral cropping (`crop_spectral_range`)
+  - Normalization: band-ratio (`normalize`), SNV (`apply_snv`), RNV (`apply_rnv`), L2 (`apply_l2`)
+  - Mask visualization and management
+  - Spectral extraction to DataFrame
+- `MS_image` — multispectral image support with channel mapping
 
 ### Preprocessing Module (`preprocessing.py`)
+`HS_preprocessor` orchestrates the full data preparation pipeline:
 
-Advanced data preparation capabilities with optimized processing pipeline:
-- `HS_preprocessor` class for automated, scientifically-ordered processing
-- Spectral range cropping as integrated pipeline step
-- Enhanced wavelength mapping for calibration files with different spectral ranges
-- Optimized Pipeline Order:
-  1. Sensor calibration (raw → reflectance)
-  2. Spike removal (artifact correction)
-  3. Spectral cropping (focus on ROI)
-  4. Solar correction (illumination normalization)
-  5. Spectral smoothing (noise reduction)
-  6. Normalization (data standardization)
-  7. Mask extraction (vegetation segmentation)
-- Configuration management and batch processing
-- Reference teflon library creation with automatic wavelength adaptation
+**Pipeline order:**
+1. Sensor calibration — raw counts → reflectance (with dark/white reference)
+2. Spike removal — artifact and dead pixel correction
+3. Spectral cropping — focus on wavelength range of interest
+4. Solar correction — illumination normalization via teflon reference
+5. Spectral smoothing — Gaussian noise reduction
+6. Normalization — band-ratio, SNV, RNV, or L2
+7. Mask extraction — vegetation segmentation via spectral indices
+
+Additional capabilities:
+- Configuration management (JSON save/load)
+- Batch folder processing
+- Reference teflon library creation with automatic wavelength mapping
+- Segmentation model integration (`load_segmentation_model`, `apply_segmentation`)
+- Spectra extraction to DataFrame
+
+### Dimensionality Reduction Module (`dim_red.py`)
+`transformer` — generic dimensionality reduction with two methods:
+- **PCA** — standard principal component analysis via scikit-learn
+- **MNF** — Minimum Noise Fraction (custom implementation, no external HSI dependencies)
+  - Custom noise covariance estimation using shift-difference noise model
+  - `validate_components` for quality assessment
+
+`HS_PCA_transformer` is provided as a backward-compatible alias for `transformer(method='pca')`.
+
+### Annotation Module (`annotation.py`)
+`NapariHS_Annotator` — interactive annotation using Napari:
+- Supports multiple `HS_image` / `MS_image` inputs simultaneously
+- Up to 10 annotation classes with customizable colors
+- Paint, erase, fill tools with undo/redo (Ctrl+Z)
+- Automatic mask de-repeating for tiled image visualizations
+- Export annotations as numpy arrays
+- Save/load masks as pickle files
+- Integrates with Jupyter notebooks (including VS Code)
+
+### Segmentation Module (`segmentation.py`)
+`SpectralSegmenter` — supervised pixel-level classification:
+- Load annotations from `NapariHS_Annotator` outputs
+- Extract and inspect training data with per-class spectral visualization
+- Optuna-based automated model optimization (Random Forest, Gradient Boosting, SVM, PCA+RF pipeline)
+- Configurable class balancing and downsampling
+- Predict segmentation maps for new images
+- Batch prediction across image folders
+- Visualize results with class overlays
+- Save/load trained models (`.pkl`)
 
 ### Utils Module (`utils.py`)
-
-Helper functions and utilities:
-- Advanced noise analysis and ranking functions (rank_noisy_bands, summarize_noisiest_bands)
-- Spectral data extraction and DataFrame conversion
-- Configuration template generation (create_config_template)
-- Multi-spectrum plotting functionality (plot_spectra)
-- Visualization tools (vis_clust_2D, plot_confusion_matrix)
-- RGB sample extraction with enhancement
-- Image stretching and contrast adjustment
-- Polygon mask generation from JSON annotations
-- File I/O operations and format conversions
-
-## Key Features & Recent Enhancements
-
-### Spectral Range Cropping
-
-- Crop hyperspectral images to specific wavelength ranges
-- Supports both wavelength (nm) and band index specifications
-- Automatic metadata and attribute updates
-- Integrated as first pipeline step for computational efficiency
-
-### Intelligent Wavelength Mapping
-
-- Automatic interpolation between different spectral configurations
-- Calibration files can have any spectral range/resolution
-- Reference teflon spectra adapt to current image wavelengths
-- No more manual spectral alignment required
-
-### Advanced Noise Analysis
-
-- `rank_noisy_bands()`: Identify and rank problematic spectral bands
-- `summarize_noisiest_bands()`: Generate comprehensive noise reports
-- Robust statistical methods using Savitzky-Golay filtering
-- Integrated with visualization tools
-
-### Multi-Spectrum Visualization
-
-- `plot_spectra()`: Plot multiple spectra with customizable scaling
-- Support for dictionary-based spectrum input format
-- Interactive visualization capabilities
-- Consistent with reference teflon library format
-
-### Optimized Pipeline Architecture
-
-- Scientifically-informed step ordering for maximum data quality
-- Each step designed to preserve information for subsequent processing
-- Modular design allows individual step execution or full pipeline
-- Comprehensive error handling and verbose logging
+- `rank_noisy_bands`, `summarize_noisiest_bands` — spectral noise analysis
+- `plot_spectra` — multi-spectrum plotting with optional scaling
+- `get_rgb_sample` — RGB extraction and enhancement
+- `extract_masks_from_hs_image`, `extract_masked_spectra_to_df` — spectral data extraction
+- `vis_clust_2D`, `plot_confusion_matrix` — visualization tools
+- `create_config_template` — JSON configuration scaffolding
+- `print_package_info` — display package metadata
 
 ## Installation
 
-### From PyPI (coming soon)
-
-```bash
-pip install hsi-psi
-```
-
 ### From GitHub
-
 ```bash
 pip install git+https://github.com/lamewarden/HSI_PSI.git
 ```
 
 ### Development Installation
-
 ```bash
 git clone https://github.com/lamewarden/HSI_PSI.git
 cd HSI_PSI
@@ -121,180 +112,140 @@ pip install -e .[dev]
 
 ## Dependencies
 
+**Core:**
 ```
-numpy
-pandas
-matplotlib
-scikit-learn
-scikit-image
+numpy, pandas, matplotlib, scipy
+scikit-learn, scikit-image, opencv-python
 spectral
-opencv-python
-scipy
+```
+
+**Optional:**
+```
+napari[pyqt5]>=0.4.0    # annotation module
+optuna                   # segmentation model optimization
+seaborn, ipywidgets      # enhanced plots and notebooks
 ```
 
 ## Quick Start
 
-### Basic Usage with New Features
+### Load and Inspect an Image
 
 ```python
-import hsi_psi
-from hsi_psi import HS_image, HS_preprocessor, get_rgb_sample
+from hsi_psi import HS_image, get_rgb_sample
 
-# Load hyperspectral image
 image = HS_image("data/sample_image.hdr")
+print(image)  # shape and wavelength range
 
-# Display basic info
-print(f"Image shape: {image.img.shape}")
-print(f"Wavelength range: {min(image.ind)}-{max(image.ind)} nm")
+# Access a specific band
+red_band = image[670]  # band closest to 670 nm
 
-# NEW: Crop spectral range to focus on vegetation-relevant wavelengths
-image.crop_spectral_range(wl_start=450, wl_end=800)
-print(f"Cropped range: {min(image.ind)}-{max(image.ind)} nm")
-
-# Extract and show RGB
-rgb = get_rgb_sample(image, show=True, title="Cropped HS Image")
-
-# Access spectral band at specific wavelength
-red_band = image[670]  # Band closest to 670nm
+# Extract RGB for display
+rgb = get_rgb_sample(image, show=True)
 ```
 
-### Advanced Preprocessing Pipeline
+### Run the Preprocessing Pipeline
 
 ```python
 from hsi_psi import HS_preprocessor, create_config_template
 
-# Create and configure processor
-processor = HS_preprocessor("data/image.hdr", verbose=True)
-
-# Create configuration template with new spectral cropping options
 config = create_config_template()
-
-# Configure spectral cropping (NEW)
-config['spectral_cropping'] = {
-    'wl_start': 450,    # Start at 450 nm
-    'wl_end': 800,      # End at 800 nm
-    'band_start': None,  # Alternative: use band indices
-    'band_end': None
-}
-
-# Configure other processing steps
 config['sensor_calibration']['white_ref_path'] = "calibration/white_ref.hdr"
+config['spectral_cropping'] = {'wl_start': 450, 'wl_end': 900}
 config['solar_correction']['teflon_edge_coord'] = [-10, -3]
+config['normalization']['method'] = 'snv'
 
-# Run optimized pipeline (NEW ORDER: sensor_cal → spike_removal → cropping → solar → smoothing → normalization)
-processor.run_full_pipeline(config, extract_masks=True)
+processor = HS_preprocessor("data/image.hdr", verbose=True)
+processor.run_full_pipeline(config)
 
-# Get results
-processed_image = processor.get_current_image()
-rgb = processor.get_rgb_sample(show=True)
+processed = processor.get_current_image()
+processor.get_rgb_sample(show=True)
 ```
 
-
-### Reference Teflon Library with Wavelength Mapping (ENHANCED)
+### Dimensionality Reduction
 
 ```python
-# Create reference teflon library from multiple images
-processor = HS_preprocessor("data/target_image.hdr")  # Define target wavelength range
-processor.crop_spectral_range(wl_start=450, wl_end=750)  # Focus on vegetation range
+from hsi_psi import transformer
 
-# Create reference from full-range library images (e.g., 350-1000nm)
-# The library automatically maps to the target range (450-750nm)
-reference_spectrum = processor.create_reference_teflon_library(
-    hs_images="library/full_range_images/",  # Full spectral range images
-    teflon_edge_coord=(-10, -3),
-    white_ref_path="calibration/white_ref.hdr"
-)
+# PCA
+pca = transformer(method='pca')
+X = pca.HSI_to_X(image)
+pca.fit(X, n_components=10)
+img_pca = pca.X_to_img(pca.transform(X))
 
-# The reference is now automatically mapped to 450-750nm range
-print(f"Reference spectrum adapted to {len(processor.image.ind)} bands")
+# MNF (no extra dependencies required)
+mnf = transformer(method='mnf')
+X = mnf.HSI_to_X(image)
+mnf.fit(X, n_components=10)
+img_mnf = mnf.X_to_img(mnf.transform(X))
+
+print(mnf.get_explained_variance_ratio())
+print(mnf.get_method_info())
 ```
 
+### Interactive Annotation
 
-### Batch Processing with Enhanced Pipeline
+```python
+from hsi_psi import NapariHS_Annotator
+
+annotator = NapariHS_Annotator(
+    images=[image1, image2],
+    classes=['Plant', 'Background', 'Stressed'],
+)
+annotator.annotate()  # opens Napari GUI; close window when done
+
+masks = annotator.get_masks()
+annotator.save_masks("annotations/run1.pkl")
+```
+
+### Train and Apply a Segmentation Model
+
+```python
+from hsi_psi import SpectralSegmenter
+
+segmenter = SpectralSegmenter(verbose=True)
+segmenter.load_annotations("annotations/run1.pkl", images=[image1, image2])
+segmenter.extract_training_data()
+
+segmenter.visualize_spectra(show_boxplots=True)  # inspect class spectra
+
+segmenter.optimize_model(n_trials=50, n_jobs=-1)  # Optuna search
+
+mask = segmenter.predict_image(new_image)
+segmenter.visualize_results(new_image, mask)
+
+segmenter.batch_predict(image_list, output_dir="results/masks/")
+segmenter.save_model("models/segmenter_v1.pkl")
+```
+
+### Batch Processing
 
 ```python
 from hsi_psi import HS_preprocessor
 
-# Process entire folder with enhanced configuration
-processed_images = HS_preprocessor.process_folder(
-    folder_path="data/hyperspectral_images/",
-    config_path="config/enhanced_processing_config.json",
+results = HS_preprocessor.process_folder(
+    folder_path="data/raw_images/",
+    config_path="configs/pipeline.json",
     verbose=True,
-    extract_masks=True  # Include vegetation mask extraction
+    extract_masks=True
 )
-
-print(f"Processed {len(processed_images)} images")
-print("Each image includes masks and optimized preprocessing")
 ```
 
-### Multi-Spectrum Visualization (NEW)
+### Noise Analysis
 
 ```python
-from hsi_psi import plot_spectra
+from hsi_psi import rank_noisy_bands, summarize_noisiest_bands
 
-# Create reference teflon library in plot_spectra compatible format
-processor = HS_preprocessor("data/image.hdr")
-reference_spectrum = processor.create_reference_teflon_library(
-    hs_images="library/",
-    teflon_edge_coord=(-10, -3),
-    white_ref_path="calibration/white_ref.hdr"
-)
-
-# Plot multiple spectra with customizable options
-plot_spectra(
-    [reference_spectrum, another_spectrum],
-    dict_names=["Reference Teflon", "Sample Spectrum"],
-    scale=True,  # Auto-scale for better comparison
-    title="Spectral Comparison",
-    x_label="Wavelength (nm)",
-    y_label="Reflectance"
-)
+noise = rank_noisy_bands(image)
+summary = summarize_noisiest_bands(noise, top_n=10)
 ```
 
-### Advanced Visualization Tools
-
-```python
-from hsi_psi import vis_clust_2D, plot_confusion_matrix
-
-# 2D clustering visualization
-vis_clust_2D(spectral_data, pc_to_visualize=[0, 1])
-
-# Classification results visualization
-plot_confusion_matrix(y_true, y_pred, 
-                     class_names=["Healthy", "Stressed", "Dead"],
-                     fig_size=(8, 6))
-```
-
-### Data Extraction with New Utils
-
-```python
-from hsi_psi.utils import extract_masked_spectra_to_df, extract_masks_from_hs_image
-
-# Extract vegetation masks
-masks = extract_masks_from_hs_image(processed_image, 
-                                   pri_thr=-0.1, 
-                                   ndvi_thr=0.2, 
-                                   hbsi_thr=-0.6)
-
-# Extract spectra from masked regions to DataFrame
-df = extract_masked_spectra_to_df(
-    processed_images, 
-    save_path="results/extracted_spectra.csv"
-)
-
-print(f"Extracted {len(df)} spectral samples")
-print(f"Features: {df.shape[1]-1} wavelengths")  # -1 for label column
-```
-
-## Enhanced Configuration System
-
-The library now uses enhanced JSON configuration files with spectral cropping support:
+## Configuration File Format
 
 ```json
 {
   "spectral_cropping": {
     "wl_start": 450,
-    "wl_end": 800,
+    "wl_end": 900,
     "band_start": null,
     "band_end": null
   },
@@ -331,180 +282,17 @@ The library now uses enhanced JSON configuration files with spectral cropping su
 }
 ```
 
-## Optimized Processing Pipeline
-
-The pipeline has been scientifically optimized for close-range hyperspectral vegetation analysis:
-
-### Pipeline Order & Rationale:
-
-1. **Sensor Calibration** - Convert raw counts to physical reflectance units
-   - *Why first*: All subsequent processing needs calibrated data
-   - *Wavelength mapping*: Automatically handles different calibration file spectral ranges
-
-2. **Spike Removal** - Fix instrumental artifacts and dead pixels
-   - *Why early*: Prevents artifacts from propagating through pipeline
-   - *Full context*: Uses complete spectral information for better detection
-
-3. **Spectral Cropping** - Focus on wavelength range of interest
-   - *Why after calibration*: Preserves accuracy of calibration step
-   - *Efficiency*: Reduces computational load for remaining steps
-
-4. **Solar Correction** - Normalize illumination variations using teflon reference
-   - *Why after cropping*: More efficient processing on focused spectral range
-   - *Wavelength mapping*: Reference spectra automatically adapt to current range
-
-5. **Spectral Smoothing** - Reduce noise while preserving spectral features
-   - *Why late*: Preserves all real spectral information until final noise reduction
-
-6. **Normalization** - Standardize data for vegetation index calculations
-   - *Why near end*: Works on fully processed spectral data
-
-7. **Mask Extraction** - Extract vegetation regions using spectral indices
-   - *Why last*: Uses final processed data for most accurate calculations
-
-## Library Structure
-
-```
-hsi_psi/
-├── __init__.py          # Main imports and version info
-├── core.py              # HS_image and MS_image classes with cropping
-├── preprocessing.py     # Enhanced HS_preprocessor with optimized pipeline
-├── utils.py             # Utility functions with noise analysis
-└── README.md           # This file
-```
-
-## New Utility Functions
-
-### Noise Analysis Functions
-
-```python
-from hsi_psi import rank_noisy_bands, summarize_noisiest_bands
-
-# Rank bands by noise level
-noise_ranking = rank_noisy_bands(hs_image, method='savgol_residuals')
-
-# Get detailed summary
-summary = summarize_noisiest_bands(noise_ranking, top_n=10)
-```
-
-### Data Extraction Functions
-
-```python
-from hsi_psi import extract_masks_from_hs_image, extract_masked_spectra_to_df
-
-# Extract masks using vegetation indices
-masks = extract_masks_from_hs_image(hs_image, pri_thr=-0.1, ndvi_thr=0.2)
-
-# Convert to DataFrame for analysis
-df = extract_masked_spectra_to_df([hs_image], save_path="data.csv")
-```
-
-### Visualization Functions
-
-```python
-from hsi_psi import plot_spectra, vis_clust_2D, plot_confusion_matrix, get_rgb_sample
-
-# Multi-spectrum plotting
-plot_spectra([spectrum1, spectrum2], dict_names=["Sample A", "Sample B"])
-
-# 2D clustering visualization
-vis_clust_2D(spectral_data, pc_to_visualize=[0, 1])
-
-# Classification results
-plot_confusion_matrix(y_true, y_pred, class_names=["Class A", "Class B"])
-
-# RGB extraction and enhancement
-rgb = get_rgb_sample(hs_image, normalize=True, show=True)
-```
-```python
-from hsi_psi.utils import get_rgb_sample, stretch_image
-
-# Enhanced RGB extraction
-rgb = get_rgb_sample(hs_image, show=True, title="Enhanced RGB")
-
-# Image enhancement
-enhanced = stretch_image(rgb, stretch_type='histogram')
-```
-
-## Method Chaining
-
-Most methods support chaining for clean workflows:
-
-```python
-# Chain operations for efficient processing
-result = (HS_preprocessor("image.hdr", verbose=True)
-          .load_config("config.json")
-          .run_full_pipeline(extract_masks=True)
-          .get_rgb_sample(show=True))
-
-# Chain core operations
-cropped_image = (HS_image("full_range_image.hdr")
-                .crop_spectral_range(wl_start=450, wl_end=800)
-                .normalize(to_wl=751))
-```
-
-## Error Handling & Compatibility
-
-The library includes comprehensive error handling and automatic compatibility:
-
-- **Automatic Format Conversion**: Handles various hyperspectral formats
-- **Wavelength Mapping**: Automatic interpolation between different spectral configurations
-- **Missing File Handling**: Graceful fallbacks for missing calibration files
-- **Configuration Validation**: Comprehensive parameter checking
-- **Verbose Logging**: Detailed processing information for debugging
-- **Backward Compatibility**: Maintains compatibility with older configurations
-
-## Performance Optimizations
-
-### **For Close-Range Applications (1-5m height):**
-- ✅ **No atmospheric correction needed** - minimal atmospheric path
-- ✅ **Optimized pipeline order** - maximum data quality with minimum computation
-- ✅ **Spectral cropping early** - reduces computational load
-- ✅ **Intelligent wavelength mapping** - handles mixed sensor configurations
-- ✅ **Efficient batch processing** - parallel-friendly design
-
-### **Memory Management:**
-- **Lazy loading options** for large datasets
-- **Step-wise result caching** with `step_results` attribute
-- **Configurable verbosity** to reduce output overhead
-- **Efficient spectral interpolation** using scipy optimizations
-
-## Best Practices for Close-Range HSI
-
-### **1. Spectral Range Selection**
-```python
-# Focus on vegetation-relevant wavelengths
-processor.crop_spectral_range(wl_start=450, wl_end=800)  # Visible to NIR
-```
-
-### **2. Reference Teflon Management**
-```python
-# Create robust reference from multiple images
-reference = processor.create_reference_teflon_library(
-    "library_images/",
-    teflon_edge_coord=(-10, -3)
-)
-```
-
-### **3. Configuration Management**
-```python
-# Save configurations for reproducibility
-processor.save_config("configs/vegetation_analysis.json")
-
-# Reuse across similar datasets
-processor.load_config("configs/vegetation_analysis.json")
-```
+Available normalization methods: `"to_wl"`, `"snv"`, `"rnv"`, `"l2"`.
 
 ## Support & Development
 
-- **Issues**: Report bugs and feature requests via GitHub Issues
-- **Documentation**: Comprehensive docstrings and examples
-- **Testing**: Integrated test suite for core functionality
+- **Issues**: Report bugs and feature requests via [GitHub Issues](https://github.com/lamewarden/HSI_PSI/issues)
 - **Contributions**: Welcome via pull requests
 
 ---
 
-**Version**: 0.2.0  
-**Author**: HSI_PSI Development Team  
+**Version**: 0.4.0  
+**Author**: Ivan Kashkan  
+**Contact**: kashkan@psi.cz  
 **License**: MIT  
 **Optimized for**: Close-range vegetation monitoring and agricultural applications
