@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 """
 Setup script for HSI_PSI - Hyperspectral Image Processing Library
+
+Installation Options:
+    # Basic installation
+    pip install hsi-psi
+    
+    # Full installation with all hyperspectral analysis tools
+    pip install hsi-psi[full]
+    
+    # Recommended: Install conda-forge packages first for better compatibility
+    conda install -y -c conda-forge tabulate spectral plotnine xgboost=0.72.1 lightgbm=2.1.2 cvxopt
+    pip install hsi-psi
 """
 
 from setuptools import setup, find_packages
@@ -95,10 +106,31 @@ setup(
             "plotly>=5.0.0",
             "ipywidgets>=7.6.0",
         ],
+        "full": [
+            # Full hyperspectral analysis suite
+            # Note: Some packages are better installed via conda-forge:
+            # conda install -y -c conda-forge tabulate spectral plotnine xgboost=0.72.1 lightgbm=2.1.2 cvxopt
+            "pysptools>=0.15.0",    # Advanced hyperspectral tools (MNF, etc.)
+            "tabulate>=0.8.0",      # Table formatting
+            "plotnine>=0.8.0",      # Grammar of graphics plotting
+            "xgboost>=0.72.1",      # Gradient boosting (consider conda-forge version)
+            "lightgbm>=2.1.2",     # Light gradient boosting (consider conda-forge version)
+            "cvxopt>=1.2.0",        # Convex optimization
+            # Additional analysis tools
+            "seaborn>=0.11.0",
+            "plotly>=5.0.0",
+            "ipywidgets>=7.6.0",
+        ],
+        "conda": [
+            # Placeholder for conda-only dependencies documentation
+            # Install these via conda before installing HSI_PSI:
+            # conda install -y -c conda-forge tabulate spectral plotnine xgboost=0.72.1 lightgbm=2.1.2 cvxopt
+            # Then: pip install hsi-psi[conda]
+        ],
     },
     include_package_data=True,
     zip_safe=False,
-    keywords="hyperspectral imaging, remote sensing, spectral analysis, image processing, VNIR, SWIR, vegetation monitoring, agriculture, spectral cropping, wavelength mapping, close-range sensing",
+    keywords="hyperspectral imaging, remote sensing, spectral analysis, image processing, VNIR, SWIR, vegetation monitoring, agriculture, spectral cropping, wavelength mapping, close-range sensing, MNF, PCA, dimensionality reduction, pysptools",
     entry_points={
         "console_scripts": [
             "hsi-psi-info=hsi_psi.utils:print_package_info",

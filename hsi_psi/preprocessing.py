@@ -12,7 +12,7 @@ import glob
 import pandas as pd
 
 # Import from local modules using relative imports
-from .core import HS_image
+from .core import HS_image, MS_image
 
 warnings.filterwarnings("ignore")
 
@@ -58,8 +58,14 @@ class HS_preprocessor:
     - Integrated mask extraction with configurable parameters
     """
     
-    def __init__(self, image_path=None, verbose=True):
-        """Initialize with optional image path and verbose control."""
+    def __init__(self, image_path=None, verbose=False, map_channels=None):
+        """Initialize with optional image path and verbose control.
+        
+        Args:
+            image_path (str, optional): Path to hyperspectral image file
+            verbose (bool): Enable detailed logging output
+            map_channels (dict|list|array, optional): Channel mapping for 6-channel MS images
+        """
         self.image_path = image_path
         self.image = None
         self.original_image = None
@@ -67,6 +73,10 @@ class HS_preprocessor:
         self.verbose = verbose
         self.reference_teflon = None  # Store reference teflon data as dict: {wavelength: reflectance}
         self.solar_correction_applied = None  # Track if solar correction was applied
+        
+        # Segmentation model integration
+        self.segmentation_model = None  # Trained SpectralSegmenter model
+        self.segmentation_mask = None  # Predicted segmentation mask
                 
         # Store parameters for each step
         self.config = {}
@@ -77,15 +87,46 @@ class HS_preprocessor:
         self.execution_params = {}  # Parameters used for each executed step
         
         if image_path:
-            self.load_image(image_path)
+            self.load_image(image_path, map_channels=map_channels)
     
-    def load_image(self, image_path):
-        """Step 1: Load hyperspectral image."""
+    def load_image(self, image_path, map_channels=None):
+        """Step 1: Load hyperspectral image.
+        
+        Automatically detects 6-channel multispectral images and loads them as MS_image.
+        For other channel counts, loads as standard HS_image.
+        
+        Args:
+            image_path (str): Path to the image header file (.hdr)
+            map_channels (dict|list|array, optional): Channel-to-wavelength mapping for MS images.
+                Only used if image has 6 channels. If None and image has 6 channels,
+                uses default mapping: {0:755, 1:850, 2:420, 3:495, 4:670, 5:595}
+        
+        Returns:
+            self: HS_preprocessor instance for method chaining
+        """
         self.image_path = image_path
-        self.image = HS_image(image_path)
+        
+        # First, load temporarily to check channel count
+        temp_img = HS_image(image_path)
+        
+        # Check if this is a 6-channel multispectral image
+        if temp_img.bands == 6:
+            # Load as MS_image with optional channel mapping
+            if map_channels is None:
+                # Use default MS_image channel mapping
+                map_channels = {0:755, 1:850, 2:420, 3:495, 4:670, 5:595}
+            self.image = MS_image(image_path, map_channels=map_channels)
+            if self.verbose:
+                print(f" Loaded 6-channel MS image: {os.path.basename(image_path)}")
+                print(f"  Channel mapping: {dict(zip(range(6), self.image.ind))}")
+        else:
+            # Standard hyperspectral image
+            self.image = temp_img
+            if self.verbose:
+                print(f" Loaded HS image: {os.path.basename(image_path)}")
+        
         self.original_image = copy.deepcopy(self.image)
         if self.verbose:
-            print(f" Loaded image: {os.path.basename(image_path)}")
             print(f"  Shape: {self.image.img.shape}")
             print(f"  Wavelength range: {min(self.image.ind)}-{max(self.image.ind)} nm")
         return self
@@ -267,9 +308,75 @@ class HS_preprocessor:
   
     
     def extract_masks(self, pri_thr=None, ndvi_thr=None, hbsi_thr=None, min_pix_size=None, 
-                     repeat=10, show=True):
-        """Step 7: Extract vegetation masks using vegetation indices."""
+                     model_path=None, repeat=1, show=True):
+        """
+        Step 7: Extract vegetation masks using either ML model or vegetation indices.
         
+        Args:
+            model_path (str, optional): Path to trained segmentation model (.pkl). 
+                                       If provided, uses ML segmentation instead of thresholds.
+            pri_thr (float, optional): PRI threshold (only used if model_path is None)
+            ndvi_thr (float, optional): NDVI threshold (only used if model_path is None)
+            hbsi_thr (float, optional): HBSI threshold (only used if model_path is None)
+            min_pix_size (int, optional): Minimum pixel size for filtering (only used if model_path is None)
+            repeat (int): Y-axis repeat for visualization
+            show (bool): Display results
+            
+        Returns:
+            self: For method chaining
+        """
+        
+        # Check if model_path is provided (from parameter or config)
+        if model_path is None:
+            model_path = self.config.get('mask_extraction', {}).get('model_path', None)
+        
+        # ==== ML MODEL-BASED SEGMENTATION ====
+        if model_path is not None:
+            if self.verbose:
+                print("Using ML model for segmentation...")
+            
+            # Store model_path in config
+            self.config['mask_extraction'] = {
+                'method': 'ml_model',
+                'model_path': model_path
+            }
+            
+            # Load model if not already loaded or if different model
+            if self.segmentation_model is None or getattr(self, '_loaded_model_path', None) != model_path:
+                self.load_segmentation_model(model_path)
+                self._loaded_model_path = model_path
+            
+            # Apply segmentation
+            mask = self.apply_segmentation(save_mask=False, show=False, verbose=self.verbose)
+            
+            # Convert to expected format (H, W, 1) for consistency
+            if mask.ndim == 2:
+                mask = mask[:, :, np.newaxis]
+            
+            # Store mask as image attribute
+            self.image.mask = mask.astype(np.uint8)
+            
+            if self.verbose:
+                mask_pixels = np.sum(mask)
+                total_pixels = mask.shape[0] * mask.shape[1]
+                print(f"✓ ML segmentation completed")
+                print(f"  Model: {model_path}")
+                print(f"  Mask shape: {mask.shape}")
+                print(f"  Masked pixels: {mask_pixels}/{total_pixels} ({100*mask_pixels/total_pixels:.1f}%)")
+            
+            # Visualization moved to image.visualize_mask()
+            if show:
+                try:
+                    self.image.visualize_mask(repeat=repeat, title='ML Model Segmentation Result')
+                except Exception as e:
+                    if self.verbose:
+                        print(f"Note: Visualization skipped - {e}")
+            
+            # Store result
+            self.step_results['mask_extraction'] = copy.deepcopy(self.image)
+            return self
+        
+        # ==== THRESHOLD-BASED SEGMENTATION (original method) ====
         # Use parameters from loaded config if available, otherwise use provided parameters or hardcoded defaults
         if pri_thr is None:
             pri_thr = self.config.get('mask_extraction', {}).get('pri_thr', -0.1)
@@ -282,6 +389,7 @@ class HS_preprocessor:
         
         # Store parameters for this step (update config with actual values used)
         self.config['mask_extraction'] = {
+            'method': 'thresholds',
             'pri_thr': pri_thr,
             'ndvi_thr': ndvi_thr,
             'hbsi_thr': hbsi_thr,
@@ -345,8 +453,6 @@ class HS_preprocessor:
 
         # Display all vegetation indices for calibration
         if show:
-            orig_rgb = self.get_rgb_sample(normalize=True, correct=False, show=False)
-            
             fig, axes = plt.subplots(2, 3, figsize=(18, 6))
             fig.suptitle('Vegetation Indices for Threshold Calibration', fontsize=16, fontweight='bold')
             
@@ -398,28 +504,16 @@ class HS_preprocessor:
         # Store result for visualization
         self.step_results['mask_extraction'] = copy.deepcopy(self.image)
         
+        # Visualization moved to image.visualize_mask()
         if show:
-            # Create visualization with proper transparency
-            plt.figure(figsize=(8, 4))
-            plt.imshow(np.repeat(orig_rgb[:,:,:], repeat, axis=0))
-            
-            # Create turquoise overlay only where mask == 1
-            mask_repeated = np.repeat(mask[:,:,0], repeat, axis=0)
-            turquoise_overlay = np.full((mask_repeated.shape[0], mask_repeated.shape[1], 3), np.nan)
-            
-            # Only set colors where mask is 1 (true transparency for mask == 0)
-            turquoise_overlay[mask_repeated == 1, 0] = 64/255    # Red
-            turquoise_overlay[mask_repeated == 1, 1] = 224/255   # Green  
-            turquoise_overlay[mask_repeated == 1, 2] = 208/255   # Blue
-            
-            plt.imshow(turquoise_overlay, alpha=0.6)
-        
-            plt.title("Final Segmentation Result\n(Turquoise = Plant pixels)", fontsize=14, fontweight='bold')    
-            plt.axis('off')
-            plt.show()
+            try:
+                self.image.visualize_mask(repeat=repeat, title='VI Threshold Segmentation Result')
+            except Exception as e:
+                if self.verbose:
+                    print(f"Note: Visualization skipped - {e}")
         
         if self.verbose:
-            print(f" Mask extraction completed")
+            print(f"✓ Mask extraction completed")
             print(f"  PRI threshold: {pri_thr}")
             print(f"  NDVI threshold: {ndvi_thr}")
             print(f"  HBSI threshold: {hbsi_thr}")
@@ -428,6 +522,15 @@ class HS_preprocessor:
             mask_pixels = np.sum(mask)
             total_pixels = mask.shape[0] * mask.shape[1]
             print(f"  Masked pixels: {mask_pixels}/{total_pixels} ({100*mask_pixels/total_pixels:.1f}%)")
+        
+        # Store config
+        self.config['mask_extraction'] = {
+            'method': 'thresholds',
+            'pri_thr': pri_thr,
+            'ndvi_thr': ndvi_thr,
+            'hbsi_thr': hbsi_thr,
+            'min_pix_size': min_pix_size
+        }
         
         return self
 
@@ -465,7 +568,8 @@ class HS_preprocessor:
     
     # === CONVENIENCE METHODS (updated with mask extraction) ===
     
-    def run_full_pipeline(self, config_override=None, extract_masks_flag=True):
+    def run_full_pipeline(self, config_override=None, apply_segmentation=True, 
+                         segmentation_output_dir=None, show_segmentation=False):
         """
         Run the complete preprocessing pipeline using loaded configuration.
         
@@ -474,27 +578,42 @@ class HS_preprocessor:
         
         Args:
             config_override (dict, optional): Override specific parameters for any step.
-                                            Format: {'step_name': {'param': value}}
-            extract_masks_flag (bool): Whether to run mask extraction as final step
+                                            Format: {'step_name': {'param': value'}}
+            apply_segmentation (bool): Whether to apply segmentation as final step.
+                                      Method (VI-based or ML-based) determined from config.
+                                      Default: True
+            segmentation_output_dir (str, optional): If provided, saves segmentation masks to this directory.
+                                                    If None, masks are not saved.
+            show_segmentation (bool): Visualize segmentation results with image/mask/overlay subplots.
+                                     Default: False
                                             
         Returns:
             self: For method chaining
             
         Examples:
-            # Config order determines execution order
-            config = {
-                'normalization': {...},      # This runs FIRST
-                'sensor_calibration': {...}, # This runs SECOND  
-                'solar_correction': {...}    # This runs THIRD
-            }
-            processor.config = config
+            # Basic pipeline with VI-based segmentation (from config)
             processor.run_full_pipeline()
             
-            # Missing steps are skipped
-            config = {
-                'sensor_calibration': {...},  # Only these two steps
-                'normalization': {...}        # will be executed
-            }
+            # Pipeline with ML segmentation (config has method='ml_model')
+            processor.run_full_pipeline(
+                apply_segmentation=True,
+                show_segmentation=True
+            )
+            
+            # Override segmentation method via config_override
+            processor.run_full_pipeline(
+                config_override={
+                    'mask_extraction': {
+                        'method': 'ml_model',
+                        'model_path': './models/my_model.pkl'
+                    }
+                },
+                segmentation_output_dir='./output/masks/',
+                show_segmentation=True
+            )
+            
+            # Skip segmentation entirely
+            processor.run_full_pipeline(apply_segmentation=False)
         """
         
         # Check if config is loaded
@@ -525,10 +644,16 @@ class HS_preprocessor:
             pipeline_steps.remove('mask_extraction')
         
         if self.verbose:
-            print(" Running config-driven preprocessing pipeline...")
-            print(f" Steps from config (in order): {pipeline_steps}")
-            if extract_masks_flag:
-                print(f" Final step: mask_extraction")
+            print("🚀 Running config-driven preprocessing pipeline...")
+            print(f"📋 Steps from config (in order): {pipeline_steps}")
+            if apply_segmentation:
+                # Determine segmentation method from config
+                mask_config = pipeline_config.get('mask_extraction', {})
+                method = mask_config.get('method', 'thresholds')
+                if method == 'ml_model':
+                    print(f"🎯 Final step: mask_extraction (ML model)")
+                else:
+                    print(f"🎯 Final step: mask_extraction (vegetation indices)")
         
         # Validate that all steps in config are known processing steps
         known_steps = {'sensor_calibration', 'spike_removal', 'spectral_cropping', 
@@ -561,41 +686,100 @@ class HS_preprocessor:
                     traceback.print_exc()
                 raise RuntimeError(error_msg) from e
         
-        # Run mask extraction as final step if requested
-        if extract_masks_flag:
+        # Apply segmentation as final step ONLY if mask_extraction is in config AND requested
+        if apply_segmentation and 'mask_extraction' in pipeline_config:
             if self.verbose:
-                print(f" Final step: mask_extraction...")
+                print(f"🌿 Final step: mask_extraction...")
             
             try:
-                # Use mask extraction parameters from config, or defaults
-                mask_params = pipeline_config.get('mask_extraction', {
-                    'pri_thr': -0.1,
-                    'ndvi_thr': 0.2,
-                    'hbsi_thr': -0.6,
-                    'min_pix_size': 2
-                })
+                # Get mask extraction parameters from config (with overrides applied)
+                mask_config = pipeline_config.get('mask_extraction', {})
                 
-                # Don't show visualization in batch processing unless verbose
-                mask_params['show'] = self.verbose
+                # Determine method from config
+                method = mask_config.get('method', 'thresholds')
                 
+                if method == 'ml_model':
+                    # ML model-based segmentation
+                    model_path = mask_config.get('model_path')
+                    if model_path is None:
+                        raise ValueError("mask_extraction method='ml_model' requires 'model_path' in config")
+                    
+                    # Extract parameters for ML-based segmentation
+                    mask_params = {
+                        'model_path': model_path,
+                        'repeat': mask_config.get('repeat', 1),
+                        'show': False  # Will use visualize_results separately if show_segmentation=True
+                    }
+                    
+                    if self.verbose:
+                        print(f"   🤖 Using ML model: {model_path}")
+                    
+                else:
+                    # Threshold-based segmentation (vegetation indices)
+                    mask_params = {
+                        'pri_thr': mask_config.get('pri_thr', -0.1),
+                        'ndvi_thr': mask_config.get('ndvi_thr', 0.2),
+                        'hbsi_thr': mask_config.get('hbsi_thr', -0.6),
+                        'min_pix_size': mask_config.get('min_pix_size', 2),
+                        'repeat': mask_config.get('repeat', 1),
+                        'show': False  # Will show separately if show_segmentation=True
+                    }
+                    
+                    if self.verbose:
+                        print(f"   🌿 Using vegetation indices (PRI, NDVI, HBSI)")
+                
+                # Apply segmentation
                 self.extract_masks(**mask_params)
                 
+                # Save mask if output directory is provided
+                if segmentation_output_dir is not None:
+                    import os
+                    os.makedirs(segmentation_output_dir, exist_ok=True)
+                    
+                    # Generate output filename
+                    image_name = os.path.splitext(os.path.basename(self.image_path))[0]
+                    mask_path = os.path.join(segmentation_output_dir, f"{image_name}_mask.npy")
+                    
+                    # Save mask
+                    np.save(mask_path, self.image.mask)
+                    
+                    if self.verbose:
+                        print(f"💾 Mask saved to: {mask_path}")
+                
+                # Visualize results if requested
+                if show_segmentation:
+                    if self.verbose:
+                        print(f"📊 Visualizing segmentation results...")
+                    
+                    try:
+                        # Use visualize_mask method which shows RGB, mask, and overlay
+                        self.image.visualize_mask(
+                            repeat=mask_config.get('repeat', 1),
+                            title=f"Segmentation Results ({method})"
+                        )
+                    except Exception as e:
+                        if self.verbose:
+                            print(f"⚠️  Visualization failed: {e}")
+                
                 if self.verbose:
-                    print(f" Final step: mask_extraction completed")
+                    print(f"✅ Final step: mask_extraction completed")
                 
             except Exception as e:
                 error_msg = f"Error in mask extraction: {str(e)}"
                 if self.verbose:
-                    print(f" {error_msg}")
+                    print(f"❌ {error_msg}")
                     import traceback
                     traceback.print_exc()
                 raise RuntimeError(error_msg) from e
         
         if self.verbose:
-            total_steps = len(pipeline_steps) + (1 if extract_masks_flag else 0)
-            print(f" Pipeline completed successfully! ({total_steps} steps executed)")
-            if extract_masks_flag and hasattr(self.image, 'mask'):
-                print(f" Mask stored in image.mask attribute")
+            ran_segmentation = apply_segmentation and 'mask_extraction' in pipeline_config
+            if not ran_segmentation and apply_segmentation:
+                print(f"ℹ️  mask_extraction not in config — skipped (no mask produced)")
+            total_steps = len(pipeline_steps) + (1 if ran_segmentation else 0)
+            print(f"✅ Pipeline completed successfully! ({total_steps} steps executed)")
+            if ran_segmentation and hasattr(self.image, 'mask'):
+                print(f"🎭 Mask stored in image.mask attribute")
             
         return self
     
@@ -610,11 +794,43 @@ class HS_preprocessor:
         
         # Handle sensor calibration (Step 1)
         if step == 'sensor_calibration':
-            # Filter out metadata and handle white_ref_path separately
+            # Filter out metadata and handle white_ref_path and dark_calibration separately
             method_params = {k: v for k, v in step_params.items() 
-                           if k not in ['white_ref_path', 'calibration_applied', 'calibration_source']}
+                           if k not in ['white_ref_path', 'dark_calibration', 'calibration_applied', 'calibration_source']}
             white_ref_path = step_params.get('white_ref_path', None)
-            self.sensor_calibration(white_ref_path=white_ref_path, **method_params)
+            dark_calibration = step_params.get('dark_calibration', None)
+            
+            # Auto-detect calibration files if not provided
+            if (white_ref_path is None or dark_calibration is None) and hasattr(self, 'image_path') and self.image_path:
+                auto_white, auto_dark = HS_preprocessor._find_calibration_files(
+                    self.image_path,
+                    need_white=(white_ref_path is None),
+                    need_dark=(dark_calibration is None)
+                )
+                
+                if white_ref_path is None and auto_white:
+                    white_ref_path = auto_white
+                    if self.verbose:
+                        print(f"  Auto-detected white calibration: {os.path.basename(auto_white)}")
+                
+                if dark_calibration is None and auto_dark:
+                    dark_calibration = auto_dark
+                    if self.verbose:
+                        print(f"  Auto-detected dark calibration: {os.path.basename(auto_dark)}")
+            
+            # Apply sensor calibration if we have at least white reference
+            if white_ref_path is not None:
+                self.sensor_calibration(white_ref_path=white_ref_path, dark_calibration=dark_calibration, **method_params)
+            else:
+                # Try to use auto-detection from image metadata
+                if self.verbose:
+                    print("  No white calibration found, attempting auto-detection from image metadata...")
+                try:
+                    self.sensor_calibration(white_ref_path=None, dark_calibration=dark_calibration, **method_params)
+                except Exception as e:
+                    if self.verbose:
+                        print(f"  Warning: Sensor calibration skipped - {str(e)}")
+                    # Skip sensor calibration if auto-detection fails
         
         # Handle spike removal (Step 2)
         elif step == 'spike_removal':
@@ -1070,7 +1286,9 @@ class HS_preprocessor:
         # Check if input is a directory or list of files
         if isinstance(hs_images, str) and os.path.isdir(hs_images):
             # It's a directory - find all files ending with "Data.hdr"
-            hs_images_list = glob.glob(os.path.join(hs_images, "*Data.hdr"))
+                        # Alternative: using set to avoid duplicates if a file matches both patterns
+            hs_images_list = list(set(glob.glob(os.path.join(hs_images, "*Data.hdr")) + glob.glob(os.path.join(hs_images, "*Scan.hdr"))))
+            hs_images_list.sort()  # Sort for consistent ordering
             if not hs_images_list:
                 raise ValueError(f"No files ending with 'Data.hdr' found in directory: {hs_images}")
             if self.verbose:
@@ -1191,6 +1409,97 @@ class HS_preprocessor:
         }
 
     @staticmethod
+    def _find_calibration_files(data_file_path, need_white=True, need_dark=True):
+        """
+        Find matching white and dark calibration files for a data file.
+        
+        Detection order:
+        1) Split filename by '_' and join all parts except the last one.
+        2) If files are not found, split filename by '-' and join all parts except the last one.
+        For each derived base name, tries both separator variants for calibration suffixes:
+        - '{base}_WhiteCalibration.hdr' / '{base}_DarkCalibration.hdr'
+        - '{base}-WhiteCalibration.hdr' / '{base}-DarkCalibration.hdr'
+        
+        Returns:
+            tuple: (white_cal_path, dark_cal_path) - either can be None if not found
+        """
+        folder = os.path.dirname(data_file_path)
+        filename = os.path.basename(data_file_path)
+
+        def build_base_name(name, splitter):
+            parts = name.split(splitter)
+            if len(parts) < 2:
+                return None
+            return splitter.join(parts[:-1])
+
+        def resolve_calibration_paths(base_name):
+            white_candidates = [
+                os.path.join(folder, f"{base_name}_WhiteCalibration.hdr"),
+                os.path.join(folder, f"{base_name}-WhiteCalibration.hdr"),
+            ]
+            dark_candidates = [
+                os.path.join(folder, f"{base_name}_DarkCalibration.hdr"),
+                os.path.join(folder, f"{base_name}-DarkCalibration.hdr"),
+            ]
+
+            white_match = next((p for p in white_candidates if os.path.exists(p)), None)
+            dark_match = next((p for p in dark_candidates if os.path.exists(p)), None)
+            return white_match, dark_match
+
+        def unique_generic_candidate(calibration_kind):
+            suffix = f"{calibration_kind.lower()}calibration.hdr"
+            candidates = []
+            for item in os.listdir(folder):
+                lower_item = item.lower()
+                if lower_item.endswith(suffix):
+                    candidates.append(os.path.join(folder, item))
+
+            if len(candidates) == 1:
+                return candidates[0]
+            if len(candidates) == 0:
+                raise ValueError(
+                    f"Auto-detection failed for {calibration_kind}Calibration near '{filename}': "
+                    f"no matching-name file and no generic {calibration_kind}Calibration file found in folder '{folder}'."
+                )
+
+            raise ValueError(
+                f"Auto-detection failed for {calibration_kind}Calibration near '{filename}': "
+                f"no matching-name file and multiple generic candidates found in folder '{folder}': {candidates}"
+            )
+
+        # Strategy 1: underscore split (legacy/default)
+        base_name_underscore = build_base_name(filename, "_")
+        white_cal = None
+        dark_cal = None
+
+        if base_name_underscore:
+            auto_white, auto_dark = resolve_calibration_paths(base_name_underscore)
+            if white_cal is None and auto_white is not None:
+                white_cal = auto_white
+            if dark_cal is None and auto_dark is not None:
+                dark_cal = auto_dark
+
+        if (not need_white or white_cal is not None) and (not need_dark or dark_cal is not None):
+            return white_cal, dark_cal
+
+        # Strategy 2: hyphen split (fallback)
+        base_name_hyphen = build_base_name(filename, "-")
+        if base_name_hyphen:
+            auto_white, auto_dark = resolve_calibration_paths(base_name_hyphen)
+            if white_cal is None and auto_white is not None:
+                white_cal = auto_white
+            if dark_cal is None and auto_dark is not None:
+                dark_cal = auto_dark
+
+        if need_white and white_cal is None:
+            white_cal = unique_generic_candidate("White")
+
+        if need_dark and dark_cal is None:
+            dark_cal = unique_generic_candidate("Dark")
+
+        return white_cal, dark_cal
+    
+    @staticmethod
     def create_config_template():
         """Create a template configuration dictionary for user to fill."""
         template = {
@@ -1239,29 +1548,79 @@ class HS_preprocessor:
         return template
     
     @staticmethod
-    def process_folder(folder_path, white_ref_path=None, reference_teflon=None, 
-                      config=None, config_path=None, pattern="*Data.hdr", verbose=True,
-                      extract_masks=True, return_df=False):
+    def process_folder(folder_path, white_ref_path=None, dark_ref_path=None, reference_teflon=None, 
+                      config=None, config_path=None, pattern="*Data.hdr", verbose=False,
+                      apply_segmentation=True, return_df=False, map_channels=None,
+                      segmentation_output_dir=None, show_segmentation=False, tray_mask=None):
         """
-        Process all hyperspectral images in a folder with integrated mask extraction.
+        Process all hyperspectral images in a folder with integrated segmentation.
         
         Args:
             folder_path (str): Path to folder containing images
-            white_ref_path (str, optional): Path to white reference file
+            white_ref_path (str, optional): Path to white reference file. If None, auto-detects from filename pattern
+            dark_ref_path (str, optional): Path to dark calibration file. If None, auto-detects from filename pattern
             reference_teflon (dict/array, optional): Reference teflon spectrum
             config (dict, optional): Configuration dictionary
             config_path (str, optional): Path to config file to load (takes precedence over config)
             pattern (str): File pattern to match (default: "*Data.hdr")
             verbose (bool): Enable verbose output
-            extract_masks (bool): Whether to extract masks as final step
+            apply_segmentation (bool): Whether to apply segmentation as final step.
+                                      Method (VI-based or ML-based) determined from config. Default: True
             return_df (bool): If True, return concatenated DataFrame instead of images dict.
                              This processes images one by one to avoid memory overflow.
+                             If config is an empty dict, extracts all pixel spectra (no masking).
+            map_channels (dict|list|array, optional): Channel mapping for 6-channel MS images.
+                If None and images have 6 channels, uses default MS_image mapping.
+            segmentation_output_dir (str, optional): If provided, saves segmentation masks to this directory.
+            show_segmentation (bool): Visualize segmentation results with image/mask/overlay. Default: False
+            tray_mask (str, optional): Path to XSEL tray mask file.
+                - return_df=True:  extracts spectra per sub-area; DataFrame includes
+                  'tray_position' column with sub-area names (e.g. "A1", "B3").
+                - return_df=False: each image is split into N cropped HS_image objects
+                  (one per tray sub-area), keyed as ``"filename_AreaName"``.
+                  Each sub-image is cropped to the sub-area bounding box with non-plant
+                  pixels zeroed. N images × M sub-areas → N×M entries in the result dict.
             
         Returns:
             dict or pd.DataFrame: 
                 - If return_df=False: Dictionary of processed images with masks {filename: HS_image}
                 - If return_df=True: Concatenated DataFrame with spectral data from all images
+                
+        Examples:
+            # Basic batch processing with VI-based segmentation
+            results = HS_preprocessor.process_folder('data/samples/', config_path='config.json')
+            
+            # Batch processing with ML segmentation (config has method='ml_model')
+            results = HS_preprocessor.process_folder(
+                'data/samples/',
+                config_path='config_with_ml.json',
+                apply_segmentation=True,
+                segmentation_output_dir='./output/masks/',
+                show_segmentation=False  # Don't show in batch mode
+            )
+            
+            # Skip segmentation entirely
+            results = HS_preprocessor.process_folder(
+                'data/samples/',
+                config_path='config.json',
+                apply_segmentation=False
+            )
         """
+        # Be tolerant to accidental misuse: allow dict passed via config_path.
+        # In that case treat it as config dictionary and ignore file-loading branch.
+        if isinstance(config_path, dict):
+            if config is None:
+                config = config_path
+            config_path = None
+            if verbose:
+                print("Warning: config_path received a dict; using it as config.")
+
+        if config_path is not None and not isinstance(config_path, (str, os.PathLike)):
+            raise TypeError(
+                "config_path must be a path-like string (or None). "
+                "If you want to pass a configuration dictionary, use the 'config' argument."
+            )
+
         # Load config from file if config_path is provided
         loaded_config = None
         loaded_reference_teflon = None
@@ -1292,6 +1651,12 @@ class HS_preprocessor:
         # Use loaded config/reference if available, otherwise use provided parameters
         final_config = loaded_config if loaded_config is not None else config
         final_reference_teflon = loaded_reference_teflon if loaded_reference_teflon is not None else reference_teflon
+        empty_config = isinstance(final_config, dict) and len(final_config) == 0
+
+        if empty_config and verbose:
+            print("Empty configuration detected: skipping preprocessing pipeline.")
+            print("  return_df=False -> loading raw images into dict")
+            print("  return_df=True  -> extracting all pixel spectra into DataFrame")
         
         # Find all images
         image_paths = glob.glob(os.path.join(folder_path, pattern))
@@ -1317,9 +1682,66 @@ class HS_preprocessor:
                     filename = os.path.basename(img_path)
                     if verbose:
                         print(f"\nProcessing: {filename}")
+
+                    if empty_config:
+                        processor = HS_preprocessor(img_path, verbose=verbose, map_channels=map_channels)
+                        hs_image = processor.get_current_image()
+                        label = HS_preprocessor._infer_image_label(hs_image, fallback_name=filename, default_label="unknown")
+                        image_df = HS_preprocessor._extract_single_image_all_df(
+                            hs_image,
+                            label_fg=label,
+                            verbose=verbose,
+                            tray_mask=tray_mask
+                        )
+
+                        if not image_df.empty:
+                            extracted_spectra.append(image_df)
+                            if verbose:
+                                print(f"Extracted {len(image_df)} total pixels from {filename}")
+                        else:
+                            if verbose:
+                                print(f"No spectra extracted from {filename}")
+
+                        successful_count += 1
+                        del processor
+                        del hs_image
+                        continue
+                    
+                    # Auto-detect calibration files ONLY if sensor_calibration is in config
+                    current_white_ref = white_ref_path
+                    current_dark_ref = dark_ref_path
+                    
+                    # Check if sensor_calibration step is actually in the config
+                    needs_calibration = final_config is not None and 'sensor_calibration' in final_config
+                    
+                    if needs_calibration and (white_ref_path is None or dark_ref_path is None):
+                        try:
+                            auto_white, auto_dark = HS_preprocessor._find_calibration_files(
+                                img_path,
+                                need_white=(white_ref_path is None),
+                                need_dark=(dark_ref_path is None)
+                            )
+                            
+                            if white_ref_path is None and auto_white:
+                                current_white_ref = auto_white
+                                if verbose:
+                                    print(f"  Auto-detected white calibration: {os.path.basename(auto_white)}")
+                            
+                            if dark_ref_path is None and auto_dark:
+                                current_dark_ref = auto_dark
+                                if verbose:
+                                    print(f"  Auto-detected dark calibration: {os.path.basename(auto_dark)}")
+                        except ValueError as e:
+                            if verbose:
+                                print(f"  Warning: Could not auto-detect calibration files: {e}")
+                                print(f"  Skipping sensor_calibration for this image")
+                            # Remove sensor_calibration from config for this image
+                            if final_config is not None:
+                                final_config = final_config.copy()
+                                final_config.pop('sensor_calibration', None)
                     
                     # Create processor and run pipeline (inherit verbose setting)
-                    processor = HS_preprocessor(img_path, verbose=verbose)
+                    processor = HS_preprocessor(img_path, verbose=verbose, map_channels=map_channels)
                     
                     # Set the processor's config from the loaded/provided configuration
                     if final_config is not None:
@@ -1349,55 +1771,49 @@ class HS_preprocessor:
                     # Set up config override for external parameters
                     config_override = {}
                     
-                    # Add white reference path to sensor calibration config if provided
-                    if white_ref_path:
-                        config_override['sensor_calibration'] = {'white_ref_path': white_ref_path}
+                    # Add white reference and dark calibration paths to sensor calibration config if provided
+                    if current_white_ref or current_dark_ref:
+                        config_override['sensor_calibration'] = {}
+                        if current_white_ref:
+                            config_override['sensor_calibration']['white_ref_path'] = current_white_ref
+                        if current_dark_ref:
+                            config_override['sensor_calibration']['dark_calibration'] = current_dark_ref
                     
-                    processor.run_full_pipeline(config_override=config_override if config_override else None,
-                                              extract_masks_flag=extract_masks)
+                    # Run full pipeline with segmentation
+                    processor.run_full_pipeline(
+                        config_override=config_override if config_override else None,
+                        apply_segmentation=apply_segmentation,
+                        segmentation_output_dir=segmentation_output_dir,
+                        show_segmentation=show_segmentation
+                    )
                     
                     # Get processed image
                     hs_image = processor.get_current_image()
                     
                     if verbose:
                         print(f"Completed: {filename}")
-                        if extract_masks and hasattr(hs_image, 'mask') and hs_image.mask is not None:
+                        if apply_segmentation and hasattr(hs_image, 'mask') and hs_image.mask is not None:
                             mask_pixels = np.sum(hs_image.mask)
                             total_pixels = hs_image.mask.shape[0] * hs_image.mask.shape[1]
                             print(f"Mask: {mask_pixels}/{total_pixels} pixels ({100*mask_pixels/total_pixels:.1f}%)")
                     
-                    # Extract spectral data immediately to avoid memory accumulation
-                    if hs_image is not None and hasattr(hs_image, 'mask') and hs_image.mask is not None:
-                        # Apply mask to the image
-                        masked_image = hs_image.img * hs_image.mask
-                        
-                        # Reshape to 2D: (pixels, bands)
-                        masked_img_flat = masked_image.reshape(-1, masked_image.shape[2])
-                        
-                        # Filter out zero pixels (non-masked pixels)
-                        masked_img_filtered = masked_img_flat[~np.all(masked_img_flat == 0, axis=1)]
-                        
-                        if len(masked_img_filtered) > 0:
-                            # Create DataFrame with wavelengths as column names
-                            masked_img_df = pd.DataFrame(masked_img_filtered, columns=hs_image.ind)
-                            
-                            # Extract label from filename (format: "X-X-LABEL-X-...")
-                            try:
-                                label = hs_image.name.split("-")[2] if hasattr(hs_image, 'name') else filename.split("-")[2]
-                            except IndexError:
-                                label = "unknown"
-                            
-                            masked_img_df['label'] = label
-                            extracted_spectra.append(masked_img_df)
-                            
-                            if verbose:
-                                print(f"Extracted {len(masked_img_filtered)} masked pixels from {filename}")
-                        else:
-                            if verbose:
-                                print(f"No masked pixels found in {filename}")
+                    # Extract masked spectra immediately to avoid memory accumulation
+                    label = HS_preprocessor._infer_image_label(hs_image, fallback_name=filename, default_label="unknown")
+                    masked_img_df = HS_preprocessor._extract_single_image_masked_df(
+                        hs_image,
+                        label_fg=label,
+                        segmentation=False,
+                        verbose=verbose,
+                        tray_mask=tray_mask
+                    )
+
+                    if not masked_img_df.empty:
+                        extracted_spectra.append(masked_img_df)
+                        if verbose:
+                            print(f"Extracted {len(masked_img_df)} masked pixels from {filename}")
                     else:
                         if verbose:
-                            print(f"Skipping spectral extraction for {filename}: no image or mask data")
+                            print(f"No masked pixels found in {filename}")
                     
                     successful_count += 1
                     
@@ -1436,9 +1852,49 @@ class HS_preprocessor:
                     filename = os.path.basename(img_path)
                     if verbose:
                         print(f"\nProcessing: {filename}")
+
+                    if empty_config:
+                        processor = HS_preprocessor(img_path, verbose=verbose, map_channels=map_channels)
+                        results[filename] = processor.get_current_image()
+                        if verbose:
+                            print(f"Loaded raw image: {filename}")
+                        continue
+                    
+                    # Auto-detect calibration files ONLY if sensor_calibration is in config
+                    current_white_ref = white_ref_path
+                    current_dark_ref = dark_ref_path
+                    
+                    # Check if sensor_calibration step is actually in the config
+                    needs_calibration = final_config is not None and 'sensor_calibration' in final_config
+                    
+                    if needs_calibration and (white_ref_path is None or dark_ref_path is None):
+                        try:
+                            auto_white, auto_dark = HS_preprocessor._find_calibration_files(
+                                img_path,
+                                need_white=(white_ref_path is None),
+                                need_dark=(dark_ref_path is None)
+                            )
+                            
+                            if white_ref_path is None and auto_white:
+                                current_white_ref = auto_white
+                                if verbose:
+                                    print(f"  Auto-detected white calibration: {os.path.basename(auto_white)}")
+                            
+                            if dark_ref_path is None and auto_dark:
+                                current_dark_ref = auto_dark
+                                if verbose:
+                                    print(f"  Auto-detected dark calibration: {os.path.basename(auto_dark)}")
+                        except ValueError as e:
+                            if verbose:
+                                print(f"  Warning: Could not auto-detect calibration files: {e}")
+                                print(f"  Skipping sensor_calibration for this image")
+                            # Remove sensor_calibration from config for this image
+                            if final_config is not None:
+                                final_config = final_config.copy()
+                                final_config.pop('sensor_calibration', None)
                     
                     # Create processor and run pipeline (inherit verbose setting)
-                    processor = HS_preprocessor(img_path, verbose=verbose)
+                    processor = HS_preprocessor(img_path, verbose=verbose, map_channels=map_channels)
                     
                     # Set the processor's config from the loaded/provided configuration
                     if final_config is not None:
@@ -1468,19 +1924,27 @@ class HS_preprocessor:
                     # Set up config override for external parameters
                     config_override = {}
                     
-                    # Add white reference path to sensor calibration config if provided
-                    if white_ref_path:
-                        config_override['sensor_calibration'] = {'white_ref_path': white_ref_path}
+                    # Add white reference and dark calibration paths to sensor calibration config if provided
+                    if current_white_ref or current_dark_ref:
+                        config_override['sensor_calibration'] = {}
+                        if current_white_ref:
+                            config_override['sensor_calibration']['white_ref_path'] = current_white_ref
+                        if current_dark_ref:
+                            config_override['sensor_calibration']['dark_calibration'] = current_dark_ref
                     
-                    processor.run_full_pipeline(config_override=config_override if config_override else None,
-                                              extract_masks_flag=extract_masks)
+                    processor.run_full_pipeline(
+                        config_override=config_override if config_override else None,
+                        apply_segmentation=apply_segmentation,
+                        segmentation_output_dir=segmentation_output_dir,
+                        show_segmentation=show_segmentation
+                    )
                     
                     # Store result
                     results[filename] = processor.get_current_image()
                     
                     if verbose:
                         print(f"Completed: {filename}")
-                        if extract_masks and hasattr(processor.image, 'mask'):
+                        if apply_segmentation and hasattr(processor.image, 'mask'):
                             mask_pixels = np.sum(processor.image.mask)
                             total_pixels = processor.image.mask.shape[0] * processor.image.mask.shape[1]
                             print(f"Mask: {mask_pixels}/{total_pixels} pixels ({100*mask_pixels/total_pixels:.1f}%)")
@@ -1490,14 +1954,218 @@ class HS_preprocessor:
                         print(f"Failed {filename}: {str(e)}")
                     results[filename] = None
             
+            # If tray_mask provided, expand each image into per-sub-area HS_image objects
+            if tray_mask is not None:
+                expanded = {}
+                for key, hs_image in results.items():
+                    if hs_image is None:
+                        continue
+                    try:
+                        sub_images = HS_preprocessor._split_image_by_tray_mask(hs_image, tray_mask)
+                        for area_name, sub_img in sub_images.items():
+                            expanded[f"{key}_{area_name}"] = sub_img
+                        if verbose:
+                            print(f"  {key}: split into {len(sub_images)} tray sub-images")
+                    except Exception as te:
+                        if verbose:
+                            print(f"  Warning: tray split failed for {key}: {te}")
+                        expanded[key] = hs_image
+                results = expanded
+
             if verbose:
                 successful_results = [r for r in results.values() if r is not None]
-                print(f"\nProcessed {len(successful_results)}/{len(image_paths)} images successfully")
-                if extract_masks:
+                print(f"\nProcessed {len(successful_results)} result images successfully")
+                if apply_segmentation:
                     mask_count = sum(1 for r in successful_results if hasattr(r, 'mask') and r.mask is not None)
-                    print(f"Masks extracted for {mask_count}/{len(successful_results)} processed images")
+                    print(f"Segmentation applied to {mask_count}/{len(successful_results)} processed images")
             return results
     
+    
+    # ==================== SEGMENTATION INTEGRATION ====================
+    
+    @staticmethod
+    def _split_image_by_tray_mask(hs_image, tray_mask_path):
+        """
+        Split a processed HS_image into one cropped HS_image per tray sub-area.
+
+        For each sub-area defined in the XSEL file:
+          1. Combine the image's plant mask with the sub-area rectangle mask.
+          2. Crop the image to the sub-area bounding box.
+          3. Zero out pixels that fall outside the combined (plant AND tray) mask.
+          4. Return a new HS_image with updated spatial metadata and name
+             ``<original_name>_<area_name>``.
+
+        Args:
+            hs_image: Processed HS_image with .img, .ind, .mask/.seg_mask, .meta, .name.
+            tray_mask_path (str): Path to the XSEL tray mask file.
+
+        Returns:
+            dict[str, HS_image]: {area_name: cropped_HS_image}
+        """
+        tray_masks = hs_image._load_tray_masks_from_xsel(tray_mask_path)
+
+        # Resolve the plant mask (2D bool)
+        plant_mask = hs_image._get_mask_2d() if hasattr(hs_image, '_get_mask_2d') else None
+        if plant_mask is None:
+            plant_mask = np.ones(hs_image.img.shape[:2], dtype=bool)
+
+        sub_images = {}
+        for area_name, tray_area_mask in tray_masks.items():
+            # Bounding box from the rectangular tray area mask
+            rows = np.where(tray_area_mask.any(axis=1))[0]
+            cols = np.where(tray_area_mask.any(axis=0))[0]
+            if rows.size == 0 or cols.size == 0:
+                continue  # Empty rectangle
+
+            top, bottom = int(rows[0]), int(rows[-1]) + 1
+            left, right = int(cols[0]), int(cols[-1]) + 1
+
+            # Combined mask: plant pixels that also fall inside this tray area
+            combined_mask = plant_mask & tray_area_mask
+
+            # Crop image and combined mask to sub-area bounding box
+            cropped_img = hs_image.img[top:bottom, left:right, :].copy()
+            cropped_combined = combined_mask[top:bottom, left:right]
+
+            # Zero out non-plant pixels within the crop
+            cropped_img[~cropped_combined] = 0
+
+            # Build new HS_image shell (no data_path load)
+            sub = hs_image.__class__.__new__(hs_image.__class__)
+            sub.__dict__.update({k: v for k, v in hs_image.__dict__.items()
+                                  if k not in ('img', 'meta', 'name', 'mask',
+                                               'tray_masks', 'tray_seg_masks',
+                                               'tray_segmented_hypercubes')})
+            sub.img = cropped_img
+            sub.ind = list(hs_image.ind)  # Same wavelengths
+            sub.name = f"{hs_image.name}_{area_name}"
+
+            # Update spatial metadata
+            sub.meta = copy.deepcopy(hs_image.meta)
+            sub.meta['lines'] = bottom - top
+            sub.meta['samples'] = right - left
+
+            # Carry cropped plant mask
+            sub.mask = cropped_combined
+
+            sub_images[area_name] = sub
+
+        return sub_images
+
+    def load_segmentation_model(self, model_path, verbose=None):
+        """
+        Load a trained SpectralSegmenter model for automatic segmentation.
+        
+        Args:
+            model_path (str): Path to saved model file (.pkl)
+            verbose (bool, optional): Override instance verbose setting for this operation
+            
+        Returns:
+            self: For method chaining
+            
+        Example:
+            processor = HS_preprocessor()
+            processor.load_segmentation_model('models/best_segmenter.pkl')
+            processor.load_image('data/new_sample.hdr')
+            processor.run_full_pipeline(apply_segmentation=True)
+        """ 
+        try:
+            from .segmentation import SpectralSegmenter
+        except ImportError:
+            raise ImportError("SpectralSegmenter not available. Install required dependencies: pip install optuna scikit-learn")
+        
+        use_verbose = verbose if verbose is not None else self.verbose
+        
+        # Create SpectralSegmenter instance and load the model
+        # The SpectralSegmenter will handle verbose output during loading
+        self.segmentation_model = SpectralSegmenter(verbose=use_verbose)
+        self.segmentation_model.load_model(model_path)
+        
+        return self
+    
+    def apply_segmentation(self, save_mask=False, output_dir=None, show=False, verbose=None):
+        """
+        Apply loaded segmentation model to the current preprocessed image.
+        
+        Stores the predicted segmentation mask in self.segmentation_mask and 
+        optionally in self.image.segmentation_mask for compatibility.
+        
+        Args:
+            save_mask (bool): Save segmentation mask as .npy file
+            output_dir (str, optional): Directory to save mask (default: './output/')
+            show (bool): Visualize segmentation results
+            verbose (bool, optional): Override instance verbose setting
+            
+        Returns:
+            np.ndarray: Binary segmentation mask (H x W)
+            
+        Raises:
+            ValueError: If no model is loaded or no image is available
+            
+        Example:
+            processor.load_segmentation_model('model.pkl')
+            processor.load_image('sample.hdr')
+            processor.run_full_pipeline()
+            mask = processor.apply_segmentation(save_mask=True, show=True)
+        """
+        if self.segmentation_model is None:
+            raise ValueError("No segmentation model loaded. Call load_segmentation_model() first.")
+        
+        if self.image is None:
+            raise ValueError("No image loaded. Call load_image() and run preprocessing first.")
+        
+        use_verbose = verbose if verbose is not None else self.verbose
+        
+        if use_verbose:
+            print("Applying segmentation model to preprocessed image...")
+        
+        # Use the SpectralSegmenter's predict_image method
+        predicted_mask = self.segmentation_model.predict_image(self.image)
+        
+        # Store the mask
+        self.segmentation_mask = predicted_mask
+        
+        # Also store in image object for easier access
+        if not hasattr(self.image, 'segmentation_mask'):
+            self.image.segmentation_mask = predicted_mask
+        else:
+            self.image.segmentation_mask = predicted_mask
+        
+        if use_verbose:
+            print(f"✓ Segmentation completed")
+            # Display class distribution from the segmenter (already printed by predict_image if verbose=True)
+        
+        # Visualize if requested
+        if show:
+            self.segmentation_model.visualize_results(
+                self.image,
+                predicted_mask,
+                show_rgb=True,
+                show_overlay=True
+            )
+        
+        # Save mask if requested
+        if save_mask:
+            if output_dir is None:
+                output_dir = './output/'
+            
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Generate filename from image name
+            if hasattr(self.image, 'name'):
+                base_name = self.image.name
+            else:
+                base_name = os.path.splitext(os.path.basename(self.image_path))[0] if self.image_path else 'image'
+            
+            mask_filename = f"{base_name}_segmentation_mask.npy"
+            mask_path = os.path.join(output_dir, mask_filename)
+            
+            np.save(mask_path, predicted_mask)
+            
+            if use_verbose:
+                print(f"  Saved mask to: {mask_path}")
+        
+        return predicted_mask
     
     
     def crop_spectral_range(self, wl_start=None, wl_end=None, band_start=None, band_end=None):
@@ -1531,15 +2199,44 @@ class HS_preprocessor:
         self.step_results['spectral_cropped'] = copy.deepcopy(self.image)
         return self
     
-    def sensor_calibration(self, white_ref_path=None, dark_calibration=False, clip_to=10):
-        """Step 1: Apply white reference calibration (first step - converts raw counts to reflectance)."""
+    def sensor_calibration(self, white_ref_path=None, dark_calibration=None, clip_to=10):
+        """
+        Step 1: Apply white reference calibration (first step - converts raw counts to reflectance).
+        
+        Parameters:
+            white_ref_path (str, optional): Path to white calibration file. If None, auto-detects from image metadata.
+            dark_calibration (str or bool, optional): Path to dark calibration file.
+                If None, tries auto-detection from image filename. If False, skips dark calibration.
+            clip_to (float): Maximum reflectance value for clipping.
+        """
         if self.image is None:
             raise ValueError("No image loaded. Call load_image() first.")
         if self.image.calibrated == True:
             if self.verbose:
                 print("Image already sensor calibrated. Skipping this step.")
             return self
-        
+
+        # Auto-detect white and dark calibration in single-image mode when not explicitly provided
+        image_path_for_search = getattr(self, 'image_path', None) or (self.image.data_path if self.image else None)
+        if image_path_for_search and (white_ref_path is None or dark_calibration is None):
+            try:
+                auto_white, auto_dark = HS_preprocessor._find_calibration_files(
+                    image_path_for_search,
+                    need_white=(white_ref_path is None),
+                    need_dark=(dark_calibration is None)
+                )
+                if white_ref_path is None and auto_white is not None:
+                    white_ref_path = auto_white
+                    if self.verbose:
+                        print(f"  Auto-detected white calibration: {os.path.basename(auto_white)}")
+                if dark_calibration is None and auto_dark is not None:
+                    dark_calibration = auto_dark
+                    if self.verbose:
+                        print(f"  Auto-detected dark calibration: {os.path.basename(auto_dark)}")
+            except ValueError as e:
+                if white_ref_path is None:
+                    raise RuntimeError(f"Could not auto-detect calibration files: {e}") from e
+
         # Get calibration matrices
         if white_ref_path is not None:
             white_matrix, dark_matrix = self._upload_calibration(dark_calibration=dark_calibration, white_ref_path=white_ref_path)
@@ -1547,9 +2244,9 @@ class HS_preprocessor:
             self.image.img = np.clip((self.image.img - dark_matrix) / (white_matrix - dark_matrix), 0, clip_to)
         else:
             try:
-                self.image.calibrate(clip_to=clip_to)
+                self.image.calibrate(dc=bool(dark_calibration), clip_to=clip_to)
             except Exception as e:
-                raise RuntimeError(f"WHite calibration was not found!: {str(e)}")
+                raise RuntimeError(f"White calibration was not found!: {str(e)}")
      
         # Clean up NaN and Inf values
         self.image.img[np.isnan(self.image.img)] = 0
@@ -1949,16 +2646,29 @@ class HS_preprocessor:
     
     # === VISUALIZATION METHODS ===
     
-    def get_rgb_sample(self, normalize=True, correct=True, show=True, title='RGB Sample', axes=False, repeat=1):
+    @staticmethod
+    def get_rgb_sample_from_image(image, normalize=True, correct=True, show=False, title='RGB Sample', axes=False, repeat=1, verbose=False):
         """
-        Generate and optionally display RGB representation of the current processed image.
-        Adapted from get_rgb_sample function in readHS.py with enhanced SNV support.
+        Generate RGB representation from an HS_image or MS_image object.
+        
+        Static method version that works with standalone image objects without needing a preprocessor instance.
+        
+        Args:
+            image: HS_image or MS_image object
+            normalize (bool): Apply normalization to RGB channels
+            correct (bool): Apply outlier correction
+            show (bool): Display the RGB image
+            title (str): Plot title if show=True
+            axes (bool): Show axes if show=True  
+            repeat (int): Vertical repetition factor
+            verbose (bool): Print diagnostic messages
+            
+        Returns:
+            np.ndarray: RGB image array with shape (rows*repeat, cols, 3)
+            
+        Example:
+            rgb = HS_preprocessor.get_rgb_sample_from_image(my_image, show=True)
         """
-        if self.image is None:
-            raise ValueError("No image loaded.")
-        
-        image = self.image
-        
         # Check if image contains negative values (likely SNV-normalized)
         has_negative_values = np.any(image.img < 0)
         is_snv_normalized = hasattr(image, 'normalized') and image.normalized and has_negative_values
@@ -2019,24 +2729,19 @@ class HS_preprocessor:
         # Handle normalization differently for SNV vs regular data
         if is_snv_normalized:
             # For SNV data: use percentile-based normalization to preserve contrast
-            if self.verbose:
+            if verbose:
                 print(f" RGB ranges before processing: R[{np.min(R):.3f}, {np.max(R):.3f}], G[{np.min(G):.3f}, {np.max(G):.3f}], B[{np.min(B):.3f}, {np.max(B):.3f}]")
             
             # Use robust percentile-based scaling to preserve contrast
-            # This prevents outliers from compressing the main data range
             def robust_normalize(channel, low_percentile=2, high_percentile=98):
                 """Robust normalization using percentiles to preserve contrast."""
-                # Calculate percentiles to avoid outlier compression
                 low_val = np.percentile(channel, low_percentile)
                 high_val = np.percentile(channel, high_percentile)
                 
                 if high_val > low_val:
-                    # Scale to [0, 1] based on percentile range
                     normalized = (channel - low_val) / (high_val - low_val)
-                    # Clip to [0, 1] but preserve relative intensities
                     normalized = np.clip(normalized, 0, 1)
                 else:
-                    # If no variation, set to middle gray
                     normalized = np.full_like(channel, 0.5)
                 
                 return normalized
@@ -2046,7 +2751,7 @@ class HS_preprocessor:
             G = robust_normalize(G)
             B = robust_normalize(B)
             
-            # Enhance contrast further by stretching the histogram
+            # Enhance contrast
             def enhance_contrast(channel, gamma=0.8):
                 """Apply gamma correction to enhance contrast."""
                 return np.power(channel, gamma)
@@ -2055,12 +2760,11 @@ class HS_preprocessor:
             G = enhance_contrast(G)
             B = enhance_contrast(B)
                 
-            if self.verbose:
+            if verbose:
                 print(f"   Applied robust normalization: R[{np.min(R):.3f}, {np.max(R):.3f}], G[{np.min(G):.3f}, {np.max(G):.3f}], B[{np.min(B):.3f}, {np.max(B):.3f}]")
         
         elif normalize:
             # Traditional normalization for non-SNV data
-            # Only use interior region for normalization to avoid edge effects
             try:
                 R_norm_val = np.max(R.squeeze()[5:-5, 20:-20])
                 G_norm_val = np.max(G.squeeze()[5:-5, 20:-20])
@@ -2089,17 +2793,14 @@ class HS_preprocessor:
 
         if repeat > 1:
             # Repeat the RGB channels to match the original image shape
-            # Ensure rgb_sample is at least 3D
             if rgb_sample.ndim == 2:
                 rgb_sample = rgb_sample[:, :, np.newaxis]
-            # Repeat along axis=0 (rows)
             rgb_sample = np.repeat(rgb_sample, repeat, axis=0)
         
         if show:
             plt.figure(figsize=(8, 6))
             plt.imshow(rgb_sample)
             
-            # Enhanced title with processing info
             if is_snv_normalized:
                 enhanced_title = f"{title} (SNV-normalized)"
             else:
@@ -2112,7 +2813,28 @@ class HS_preprocessor:
         
         return rgb_sample
     
-
+    def get_rgb_sample(self, normalize=True, correct=True, show=True, title='RGB Sample', axes=False, repeat=1):
+        """
+        Generate and optionally display RGB representation of the current processed image.
+        Adapted from get_rgb_sample function in readHS.py with enhanced SNV support.
+        
+        This instance method is a wrapper around the static method get_rgb_sample_from_image().
+        """
+        if self.image is None:
+            raise ValueError("No image loaded.")
+        
+        # Call the static method with self.image
+        return self.get_rgb_sample_from_image(
+            image=self.image,
+            normalize=normalize,
+            correct=correct,
+            show=show,
+            title=title,
+            axes=axes,
+            repeat=repeat,
+            verbose=self.verbose
+        )
+    
     def spectrum_probe(
             self, 
             normalize=True, 
@@ -2235,8 +2957,11 @@ class HS_preprocessor:
                     wavelengths = data["wavelengths"]
                     color = colors[i]
                     
-                    ax2.plot(wavelengths, spectrum, color=color, label=roi_name, linewidth=2)
-                
+                    if wavelengths.shape[0] < 100:
+                        ax2.plot(wavelengths, spectrum, color=color, label=roi_name, linestyle='none', marker='.', markersize=10)
+                    else:
+                        ax2.plot(wavelengths, spectrum, color=color, label=roi_name, linewidth=2)
+
                 ax2.set_xlabel('Wavelength (nm)')
                 ax2.set_ylabel('Reflectance')
                 ax2.set_title('Spectra from ROIs')
@@ -2258,7 +2983,73 @@ class HS_preprocessor:
     
     
     @staticmethod
-    def extract_masked_spectra_to_df(processed_images_dict, save_path=None, segmentation=False, verbose=True):
+    def _infer_image_label(hs_image, fallback_name=None, default_label="FG"):
+        """Infer label from image name using legacy filename convention."""
+        try:
+            if hs_image is not None and hasattr(hs_image, 'name') and hs_image.name:
+                base = hs_image.name
+            else:
+                base = fallback_name if fallback_name is not None else ""
+            parts = base.split("-")
+            return parts[2] if len(parts) > 2 else default_label
+        except Exception:
+            return default_label
+
+    @staticmethod
+    def _extract_single_image_masked_df(hs_image, label_fg="FG", segmentation=False, verbose=False, tray_mask=None):
+        """Extract masked spectra from a single HS/MS image as DataFrame."""
+        if hs_image is None:
+            return pd.DataFrame()
+
+        try:
+            return hs_image.extract_masked_spectra(
+                include_background=segmentation,
+                as_dataframe=True,
+                foreground_label=label_fg,
+                background_label="BG",
+                tray_mask=tray_mask
+            )
+        except Exception as e:
+            if verbose:
+                print(f"    Skipping: failed masked extraction ({e})")
+            return pd.DataFrame()
+
+    @staticmethod
+    def _extract_single_image_all_df(hs_image, label_fg="FG", verbose=False, tray_mask=None):
+        """Extract all pixel spectra from a single HS/MS image as DataFrame."""
+        if hs_image is None:
+            return pd.DataFrame()
+
+        try:
+            if not hasattr(hs_image, 'img') or hs_image.img is None:
+                return pd.DataFrame()
+
+            if hs_image.img.ndim != 3:
+                return pd.DataFrame()
+
+            h, w, bands = hs_image.img.shape
+            spectra = hs_image.img.reshape(h * w, bands)
+
+            if not hasattr(hs_image, 'ind') or hs_image.ind is None or len(hs_image.ind) != bands:
+                wavelengths = list(range(bands))
+            else:
+                wavelengths = list(hs_image.ind)
+
+            all_df = pd.DataFrame(spectra, columns=wavelengths)
+            all_df['label'] = label_fg
+            all_df['tray_position'] = ""
+
+            if tray_mask is not None and verbose:
+                print("    Note: tray_mask is ignored when extracting all spectra (empty config mode)")
+
+            return all_df
+        except Exception as e:
+            if verbose:
+                print(f"    Skipping: failed all-spectra extraction ({e})")
+            return pd.DataFrame()
+
+    @staticmethod
+    def extract_masked_spectra_to_df(processed_images_dict, save_path=None, segmentation=False, verbose=False, labels=None, tray_mask=None):
         """
         Extract pixel spectra from hyperspectral images into a DataFrame.
         
@@ -2276,8 +3067,15 @@ class HS_preprocessor:
             If given, save the resulting DataFrame to CSV at this path.
         segmentation : bool, optional (default False)
             If True, also extract spectra of non-masked pixels and label them as 'BG'.
-        verbose : bool, optional (default True)
+        verbose : bool, optional (default False)
             If True, print progress information.
+        labels : list, optional
+            List of label strings, one for each image in processed_images_dict.
+            If provided, these labels will be used instead of parsing filenames.
+            Length must match the number of images.
+        tray_mask : str, optional
+            Path to XSEL tray mask file. If provided, extraction includes tray-wise
+            segmentation and `tray_position` column.
 
         Returns
         -------
@@ -2287,9 +3085,16 @@ class HS_preprocessor:
         import time
         start_time = time.time()
         
-        # Pre-allocate lists for efficiency
-        all_spectra = []
-        all_labels = []
+        # Validate labels parameter
+        if labels is not None:
+            if len(labels) != len(processed_images_dict):
+                raise ValueError(
+                    f"labels list length ({len(labels)}) must match number of images ({len(processed_images_dict)})"
+                )
+            if verbose:
+                print(f" Using provided labels: {labels}")
+        
+        extracted_frames = []
         total_pixels = 0
         
         if verbose:
@@ -2299,90 +3104,38 @@ class HS_preprocessor:
             if verbose:
                 print(f"  Processing {i+1}/{len(processed_images_dict)}: {filename}")
                 
-            # Validation checks
-            if hs_image is None or not hasattr(hs_image, 'img') or hs_image.img is None:
-                if verbose:
-                    print(f"    Skipping: no image data")
-                continue
-            if not hasattr(hs_image, 'mask') or hs_image.mask is None:
-                if verbose:
-                    print(f"    Skipping: no mask data")
-                continue
-
-            img = hs_image.img  # (H, W, B)
-            if img.ndim != 3:
-                if verbose:
-                    print(f"    Skipping: unexpected image shape {img.shape}")
-                continue
-
-            H, W, B = img.shape
-
-            # Normalize mask to 2D boolean (H, W) - optimized
-            mask = hs_image.mask
-            if mask.ndim == 3:
-                if mask.shape[2] == 1:
-                    mask_2d = mask[:, :, 0].astype(bool)
-                elif mask.shape[2] == B:
-                    # Per-band mask -> any band marked as True counts as FG
-                    mask_2d = np.any(mask, axis=2)
-                else:
-                    # Fallback: any nonzero across channels
-                    mask_2d = np.any(mask != 0, axis=2)
-            elif mask.ndim == 2:
-                mask_2d = mask.astype(bool)
+            # Generate label from provided list or parse from filename
+            if labels is not None:
+                # Use provided label
+                label_fg = labels[i]
             else:
+                label_fg = HS_preprocessor._infer_image_label(hs_image, fallback_name=filename, default_label="FG")
+
+            image_df = HS_preprocessor._extract_single_image_masked_df(
+                hs_image,
+                label_fg=label_fg,
+                segmentation=segmentation,
+                verbose=verbose,
+                tray_mask=tray_mask
+            )
+
+            if image_df.empty:
                 if verbose:
-                    print(f"    Skipping: unexpected mask shape {mask.shape}")
+                    print("    No masked pixels extracted")
                 continue
 
-            # Wavelengths validation
-            if not hasattr(hs_image, 'ind'):
-                if verbose:
-                    print(f"    Skipping: hs_image.ind (wavelengths) not found")
-                continue
-            if len(hs_image.ind) != B:
-                if verbose:
-                    print(f"    Skipping: wavelengths length {len(hs_image.ind)} != bands {B}")
-                continue
+            extracted_frames.append(image_df)
+            total_pixels += len(image_df)
 
-            # Generate label from name or filename
-            try:
-                base = hs_image.name if hasattr(hs_image, 'name') and hs_image.name else filename
-                parts = base.split("-")
-                label_fg = parts[2] if len(parts) > 2 else "FG"
-            except Exception:
-                label_fg = "FG"
-
-            # Extract foreground pixels - vectorized approach
-            fg_indices = np.where(mask_2d)
-            if len(fg_indices[0]) > 0:
-                fg_spectra = img[fg_indices]  # Direct indexing - much faster!
-                all_spectra.append(fg_spectra)
-                all_labels.extend([label_fg] * len(fg_spectra))
-                fg_count = len(fg_spectra)
-                total_pixels += fg_count
-            else:
-                fg_count = 0
-
-            # Extract background pixels if requested
-            if segmentation:
-                bg_indices = np.where(~mask_2d)
-                if len(bg_indices[0]) > 0:
-                    bg_spectra = img[bg_indices]
-                    all_spectra.append(bg_spectra)
-                    all_labels.extend(["BG"] * len(bg_spectra))
-                    bg_count = len(bg_spectra)
-                    total_pixels += bg_count
-                else:
-                    bg_count = 0
-                    
-                if verbose:
+            if verbose:
+                if segmentation:
+                    fg_count = int(np.sum(image_df['label'] == label_fg))
+                    bg_count = int(np.sum(image_df['label'] == "BG"))
                     print(f"     Extracted {fg_count} FG + {bg_count} BG pixels")
-            else:
-                if verbose:
-                    print(f"     Extracted {fg_count} FG pixels")
+                else:
+                    print(f"     Extracted {len(image_df)} FG pixels")
 
-        if not all_spectra:
+        if not extracted_frames:
             if verbose:
                 print(" No spectral data extracted!")
             return pd.DataFrame()
@@ -2391,25 +3144,11 @@ class HS_preprocessor:
         if verbose:
             print(f" Combining {total_pixels} total pixels...")
             
-        combined_spectra = np.vstack(all_spectra)
-        
-        # Create DataFrame efficiently
         if verbose:
             print(f" Creating DataFrame...")
-            
-        # Get wavelengths from first valid image
-        wavelengths = None
-        for hs_image in processed_images_dict.values():
-            if hasattr(hs_image, 'ind'):
-                wavelengths = list(hs_image.ind)
-                break
-                
-        if wavelengths is None:
-            raise ValueError("No wavelength information found in any image")
-            
-        # Create DataFrame in one go - much faster
-        df = pd.DataFrame(combined_spectra, columns=wavelengths)
-        df["label"] = all_labels
+
+        df = pd.concat(extracted_frames, axis=0, ignore_index=True)
+        wavelengths = [c for c in df.columns if c not in ('label', 'tray_position')]
 
         elapsed = time.time() - start_time
         if verbose:
@@ -2418,9 +3157,19 @@ class HS_preprocessor:
 
         if save_path is not None:
             if verbose:
-                print(f"Saving to {save_path}...")
-            df.to_csv(save_path, index=False)
+                save_start = time.time()
+                print(f" Saving to {save_path}...")
+            
+            # Use faster CSV writing for large datasets
+            # Try pyarrow engine first (much faster), fallback to default
+            try:
+                df.to_csv(save_path, index=False, engine='pyarrow')
+            except (ImportError, TypeError):
+                # Fallback: use default engine with optimizations
+                df.to_csv(save_path, index=False, chunksize=10000)
+            
             if verbose:
-                print(f" Saved successfully")
+                save_time = time.time() - save_start
+                print(f" Saved successfully in {save_time:.2f}s")
 
         return df
