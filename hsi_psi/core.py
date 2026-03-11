@@ -837,23 +837,6 @@ class MS_image(HS_image):
 
 
 
-# read data
-def get_hdr_images(folder, min_rows = 1, format='hdr'):
-    all_images = {}
-    for root, dirs, files in os.walk(folder):
-        for file in files:
-            filepath = os.path.join(root, file)
-            # select only files with .hdr extension and with more than 15 rows
-            if filepath.endswith('.hdr') and int(HS_image(filepath).rows) > min_rows:
-                if format == 'hdr':
-                    img = HS_image(filepath)
-                else:
-                    img = MS_image(filepath)
-                all_images[img.name] = img
-    return all_images
-
-
-
 def get_polygon_masks_from_json(json_file_path):
     """
     Converts polygon annotations from a Labelme JSON file into binary masks.
