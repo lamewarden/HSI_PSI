@@ -1005,7 +1005,7 @@ def convert_header_to_envi(bil_header):
         f.write(f'bands = {header_info["NBANDS"]}\n')
         # selecting the data type
         if header_info["NBITS"] == '16':
-            f.write(f'data type = 2\n')
+            f.write(f'data type = 12\n')  # uint16 (unsigned) — raw camera DN is always unsigned
         elif header_info["NBITS"] == '32':
             f.write(f'data type = 3\n')
         elif header_info["NBITS"] == '64':
